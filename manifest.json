@@ -1,0 +1,54 @@
+{
+  "manifest_version": 2,
+  "name": "Spotify to Tidal Library Sync",
+  "version": "1.0.0",
+  "description": "Transfer your music library from Spotify to Tidal. Captures liked songs, playlists, and followed artists, then matches and exports them to Tidal.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "spotify-tidal-sync@munchy",
+      "strict_min_version": "109.0"
+    }
+  },
+  "icons": {
+    "48": "icons/icon-48.svg",
+    "96": "icons/icon-96.svg"
+  },
+  "permissions": [
+    "webRequest",
+    "webRequestBlocking",
+    "storage",
+    "tabs",
+    "activeTab",
+    "*://*.spotify.com/*",
+    "*://*.tidal.com/*"
+  ],
+  "background": {
+    "scripts": [
+      "lib/storage.js",
+      "lib/spotify-api.js",
+      "lib/tidal-api.js",
+      "background/background.js"
+    ],
+    "persistent": true
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://open.spotify.com/*"],
+      "js": ["content/spotify.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["*://listen.tidal.com/*"],
+      "js": ["content/tidal.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "browser_action": {
+    "default_icon": {
+      "48": "icons/icon-48.svg",
+      "96": "icons/icon-96.svg"
+    },
+    "default_title": "Spotify to Tidal Library Sync",
+    "default_popup": "popup/popup.html"
+  }
+}

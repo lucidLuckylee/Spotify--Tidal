@@ -1,0 +1,641 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  width: 360px;
+  min-height: 200px;
+  background: #121212;
+  color: #e0e0e0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+header {
+  padding: 16px 16px 8px;
+  border-bottom: 1px solid #282828;
+}
+
+.header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.header-icons {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.service-icon {
+  color: #444;
+  transition: color 0.2s;
+  display: flex;
+  align-items: center;
+}
+
+.service-icon.connected {
+  color: #1db954;
+}
+
+#tidal-icon.connected {
+  color: #00FFFF;
+}
+
+h1 {
+  font-size: 18px;
+  font-weight: 700;
+  color: #fff;
+}
+
+h2 {
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  margin-bottom: 8px;
+}
+
+section {
+  padding: 12px 16px;
+  border-bottom: 1px solid #282828;
+}
+
+/* Onboarding */
+.onboarding-text {
+  font-size: 12px;
+  color: #aaa;
+  margin-bottom: 12px;
+}
+
+.onboarding-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.onboarding-step {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.onboarding-step p {
+  font-size: 11px;
+  color: #888;
+  margin-top: 2px;
+}
+
+.onboarding-step a {
+  color: #1db954;
+  text-decoration: none;
+}
+
+.onboarding-step a:hover {
+  text-decoration: underline;
+}
+
+.onboarding-step strong {
+  font-size: 12px;
+  color: #e0e0e0;
+}
+
+.step-num {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #282828;
+  color: #888;
+  font-size: 11px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.onboarding-status {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+}
+
+.ob-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 12px;
+  border-radius: 12px;
+  transition: background 0.2s, color 0.2s;
+}
+
+.ob-badge.disconnected {
+  background: #282828;
+  color: #666;
+}
+
+.ob-badge.connected {
+  background: #1db95425;
+  color: #1db954;
+}
+
+#ob-tidal.connected {
+  background: #00FFFF20;
+  color: #00FFFF;
+}
+
+/* Buttons */
+button {
+  display: block;
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s, background 0.15s;
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background: #1db954;
+  color: #000;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: #1ed760;
+}
+
+#btn-export {
+  background: #00FFFF;
+  color: #000;
+}
+
+#btn-export:hover:not(:disabled) {
+  background: #33ffff;
+}
+
+.btn-secondary {
+  background: #282828;
+  color: #e0e0e0;
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: #333;
+}
+
+.btn-danger {
+  background: transparent;
+  color: #e74c3c;
+  border: 1px solid #e74c3c44;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: #e74c3c18;
+}
+
+.btn-icon {
+  width: auto;
+  background: transparent;
+  color: #888;
+  font-size: 20px;
+  padding: 0 4px;
+}
+
+.btn-icon:hover {
+  color: #fff;
+}
+
+.btn-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.btn-row button {
+  flex: 1;
+}
+
+/* Capture button states */
+#btn-capture-all.capturing:hover {
+  background: #e67e22;
+  color: #000;
+}
+
+#btn-capture-all.paused {
+  background: transparent;
+  border: 1px solid #e67e22;
+  color: #e67e22;
+}
+
+/* Playlist selection */
+.playlist-select {
+  margin-bottom: 10px;
+}
+
+.playlist-select-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.playlist-select-label {
+  font-size: 11px;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.select-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.select-actions a {
+  font-size: 11px;
+  color: #1db954;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.select-actions a:hover {
+  color: #1ed760;
+}
+
+.playlist-list {
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid #282828;
+  border-radius: 6px;
+  background: #1a1a1a;
+}
+
+.playlist-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  cursor: pointer;
+  transition: background 0.1s;
+  border-bottom: 1px solid #222;
+  user-select: none;
+}
+
+.playlist-item:last-child {
+  border-bottom: none;
+}
+
+.playlist-item:hover {
+  background: #252525;
+}
+
+.playlist-item.selected {
+  background: #1db95412;
+}
+
+/* Toggle dot indicator */
+.toggle-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #333;
+  border: 2px solid #555;
+  flex-shrink: 0;
+  transition: background 0.2s, border-color 0.2s, box-shadow 0.2s;
+}
+
+.toggle-dot.on {
+  background: #1db954;
+  border-color: #1db954;
+  box-shadow: 0 0 4px #1db95460;
+}
+
+.playlist-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.playlist-name {
+  font-size: 12px;
+  color: #e0e0e0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.playlist-meta {
+  font-size: 10px;
+  color: #666;
+  margin-top: 1px;
+}
+
+.playlist-badge {
+  font-size: 9px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: #282828;
+  color: #888;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.playlist-badge.favorites {
+  background: #1db95420;
+  color: #1db954;
+}
+
+/* Drag & drop states */
+.playlist-item.drag-ready {
+  cursor: grabbing;
+  background: #252525;
+}
+
+.playlist-item.dragging {
+  opacity: 0.3;
+}
+
+.playlist-item.drag-over {
+  background: #1db95425;
+  box-shadow: inset 0 0 0 1px #1db95460;
+  border-radius: 4px;
+}
+
+.playlist-item.drag-over .playlist-name {
+  color: #1db954;
+}
+
+/* Toggle switch (albums, artists) */
+.toggle-switch {
+  position: relative;
+  width: 32px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  position: absolute;
+}
+
+.toggle-track {
+  position: absolute;
+  inset: 0;
+  background: #333;
+  border-radius: 9px;
+  transition: background 0.2s;
+  cursor: pointer;
+}
+
+.toggle-track::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  background: #888;
+  border-radius: 50%;
+  transition: transform 0.2s, background 0.2s;
+}
+
+.toggle-switch input:checked + .toggle-track {
+  background: #1db95440;
+}
+
+.toggle-switch input:checked + .toggle-track::after {
+  transform: translateX(14px);
+  background: #1db954;
+}
+
+/* Extra toggles (albums, artists) */
+.extra-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  margin-top: 6px;
+  background: #1a1a1a;
+  border: 1px solid #282828;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  color: #e0e0e0;
+}
+
+.toggle-count {
+  margin-left: auto;
+  font-size: 11px;
+  color: #666;
+}
+
+/* Section header row */
+.section-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 4px;
+}
+
+.section-header-row h2 {
+  margin-bottom: 0;
+}
+
+.playlist-summary {
+  font-size: 11px;
+  color: #888;
+}
+
+/* Hint text */
+.hint {
+  font-size: 11px;
+  color: #888;
+  margin-bottom: 6px;
+}
+
+/* Progress */
+.progress-area {
+  margin-top: 10px;
+}
+
+.progress-bar {
+  width: 100%;
+  height: 4px;
+  background: #282828;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #1db954, #00FFFF);
+  border-radius: 2px;
+  transition: width 0.2s ease;
+}
+
+.progress-text {
+  font-size: 11px;
+  color: #888;
+  margin-top: 4px;
+}
+
+/* Export results */
+#export-results {
+  margin-top: 10px;
+}
+
+#export-stats-text {
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+
+/* Modal */
+.modal {
+  position: fixed;
+  inset: 0;
+  background: #000000cc;
+  z-index: 100;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 20px;
+}
+
+.modal-content {
+  background: #1a1a1a;
+  border-radius: 8px;
+  width: 340px;
+  max-height: 400px;
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid #282828;
+}
+
+.modal-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.modal-actions .btn-secondary {
+  width: auto;
+  font-size: 11px;
+  padding: 4px 10px;
+}
+
+.modal-body {
+  padding: 12px 16px;
+  overflow-y: auto;
+  font-size: 12px;
+}
+
+.modal-body .unmatched-item {
+  padding: 6px 4px;
+  border-bottom: 1px solid #282828;
+  border-radius: 4px;
+  transition: background 0.1s;
+}
+
+.modal-body .unmatched-item:hover {
+  background: #252525;
+}
+
+.modal-body .unmatched-item:last-child {
+  border-bottom: none;
+}
+
+.unmatched-item .track-name {
+  color: #fff;
+}
+
+.unmatched-item .track-artist {
+  color: #888;
+  font-size: 11px;
+}
+
+.unmatched-item .track-reason {
+  color: #e74c3c;
+  font-size: 10px;
+}
+
+/* Activity log */
+.activity-log {
+  margin-top: 6px;
+  max-height: 80px;
+  overflow-y: auto;
+  font-size: 11px;
+  font-family: monospace;
+  color: #777;
+  background: #1a1a1a;
+  border-radius: 4px;
+  padding: 4px 6px;
+}
+
+.activity-log .log-line {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.activity-log .log-line:last-child {
+  color: #ccc;
+}
+
+/* Confirm dialog */
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  background: #000000aa;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.confirm-box {
+  background: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 10px;
+  padding: 20px;
+  width: 280px;
+  text-align: center;
+}
+
+.confirm-box p {
+  font-size: 13px;
+  color: #e0e0e0;
+  margin-bottom: 16px;
+}
+
+.confirm-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.confirm-actions button {
+  flex: 1;
+}
+
+/* Utility */
+.hidden {
+  display: none !important;
+}

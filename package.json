@@ -1,0 +1,13 @@
+{
+  "private": true,
+  "scripts": {
+    "lint": "web-ext lint --source-dir . --ignore-files 'tests/**' 'vitest.config.js' 'package.json' 'package-lock.json'",
+    "build": "web-ext build --source-dir . --artifacts-dir ../dist --ignore-files 'tests/**' 'vitest.config.js' 'package.json' 'package-lock.json' 'node_modules/**'",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "web-ext": "latest",
+    "vitest": "latest"
+  }
+}
