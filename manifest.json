@@ -18,7 +18,6 @@
     "webRequestBlocking",
     "storage",
     "tabs",
-    "activeTab",
     "*://*.spotify.com/*",
     "*://*.tidal.com/*"
   ],

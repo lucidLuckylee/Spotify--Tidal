@@ -69,7 +69,7 @@ browser.webRequest.onBeforeRequest.addListener(
         const merged = new Uint8Array(total);
         let off = 0;
         for (const c of chunks) { merged.set(c, off); off += c.length; }
-        handleInterceptedBody(details.url, new TextDecoder("utf-8").decode(merged));
+        handleInterceptedBody(new TextDecoder("utf-8").decode(merged));
       } catch (e) {
         console.error("[Munchy] response decode failed", details.url, e);
       }
@@ -155,8 +155,8 @@ async function spotifyReplay(operationName, vars = {}) {
   if (!res.ok) {
     throw new Error(`Replay ${operationName} failed: ${res.status} ${text.slice(0, 200)}`);
   }
-  // Feed responses through the same parsing path as live page traffic.
-  handleInterceptedBody(url, text);
+  // The filterResponseData listener parses the body separately, so we don't
+  // re-process it here.
   try { return JSON.parse(text); } catch { return null; }
 }
 
@@ -457,23 +457,10 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 // ── Intercepted body handler ───────────────────────────────────────────────
 
-function handleInterceptedBody(url, body) {
+function handleInterceptedBody(body) {
   let data;
   try { data = JSON.parse(body); } catch { return; }
-
-  const before = SpotifyCapture.getStats();
-  SpotifyCapture.processResponse(url, data);
-  const after = SpotifyCapture.getStats();
-
-  const diff = {
-    tracks: after.tracks - before.tracks,
-    playlists: after.playlists - before.playlists,
-    albums: after.albums - before.albums,
-    artists: after.artists - before.artists,
-  };
-  if (diff.tracks || diff.playlists || diff.albums || diff.artists) {
-    browser.runtime.sendMessage({ action: "CAPTURE_UPDATE", stats: after }).catch(() => {});
-  }
+  SpotifyCapture.processResponse(data);
 }
 
 // ── Status ─────────────────────────────────────────────────────────────────
