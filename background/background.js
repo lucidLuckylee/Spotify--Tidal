@@ -1,55 +1,381 @@
-// Background script — token interception + passive data capture
+// Background script — passive Spotify capture + Tidal export.
+//
+// We never inject into the page or scroll its DOM. Instead we observe XHR
+// traffic with webRequest.filterResponseData to:
+//   1. Capture pathfinder operation templates (operationName + sha256Hash +
+//      example variables) plus the request headers needed to replay them.
+//   2. Read response bodies to opportunistically populate the library.
+//
+// Once we have enough templates + headers, we replay them ourselves to
+// paginate the user's full library — playlists, liked songs, each playlist's
+// tracks. This kicks off automatically (debounced) as the user uses Spotify
+// and is rate-limited by a sync cooldown.
+
+const SYNC_COOLDOWN_MS = 60 * 60 * 1000;       // throttle auto-syncs
+const AUTO_SYNC_DEBOUNCE_MS = 8_000;           // settle period after captures
+const REQUIRED_TEMPLATES = ["libraryV3", "fetchLibraryTracks", "fetchPlaylistContents"];
+
+const SPOTIFY_REPLAY_HEADERS = new Set([
+  "authorization",
+  "client-token",
+  "app-platform",
+  "spotify-app-version",
+  "accept",
+  "accept-language",
+  "content-type",
+]);
 
 const state = {
   spotifyToken: null,
   tidalToken: null,
   exporting: false,
-  capturing: false,
-  capturePaused: false,
+  syncing: false,
+  syncStatus: "",
+  spotifyHeaders: {},
+  spotifyTemplates: {},
+  lastSyncedAt: 0,
 };
 
-let resumeResolver = null;
-function waitForResume() {
-  return new Promise((resolve) => { resumeResolver = resolve; });
-}
+// ── Restore persisted state on startup ─────────────────────────────────────
 
-// ── Strip CSP so our content script can inject the fetch interceptor ────────
+(async () => {
+  const tokens = await Storage.getTokens();
+  if (tokens.spotify) state.spotifyToken = tokens.spotify;
+  if (tokens.tidal) state.tidalToken = tokens.tidal;
+  const auth = await Storage.getSpotifyAuth();
+  if (auth.headers) state.spotifyHeaders = auth.headers;
+  if (auth.templates) state.spotifyTemplates = auth.templates;
+  if (auth.lastSyncedAt) state.lastSyncedAt = auth.lastSyncedAt;
+})();
 
-browser.webRequest.onHeadersReceived.addListener(
+// ── Capture Spotify XHR responses ──────────────────────────────────────────
+// Firefox-only filterResponseData: read response bodies from the background
+// without touching the page (so no CSP fight, no script injection).
+
+browser.webRequest.onBeforeRequest.addListener(
   (details) => {
-    return {
-      responseHeaders: details.responseHeaders.map((h) => {
-        if (h.name.toLowerCase() === "content-security-policy") {
-          // Only relax script-src to allow our inline fetch interceptor
-          h.value = h.value.replace(
-            /script-src\s+([^;]*)/i,
-            (match, policies) => {
-              if (policies.includes("'unsafe-inline'")) return match;
-              return `script-src ${policies} 'unsafe-inline'`;
-            }
-          );
-        }
-        return h;
-      }),
+    captureSpotifyTemplate(details);
+    const filter = browser.webRequest.filterResponseData(details.requestId);
+    const chunks = [];
+    filter.ondata = (event) => {
+      chunks.push(new Uint8Array(event.data));
+      filter.write(event.data);
     };
+    filter.onstop = () => {
+      filter.close();
+      try {
+        let total = 0;
+        for (const c of chunks) total += c.length;
+        const merged = new Uint8Array(total);
+        let off = 0;
+        for (const c of chunks) { merged.set(c, off); off += c.length; }
+        handleInterceptedBody(details.url, new TextDecoder("utf-8").decode(merged));
+      } catch (e) {
+        console.error("[Munchy] response decode failed", details.url, e);
+      }
+    };
+    filter.onerror = () => {};
   },
-  { urls: ["*://open.spotify.com/*"], types: ["main_frame", "sub_frame"] },
-  ["blocking", "responseHeaders"]
+  { urls: ["*://*.spotify.com/*"], types: ["xmlhttprequest"] },
+  ["blocking", "requestBody"]
 );
 
-// ── Token interception ──────────────────────────────────────────────────────
+// Pathfinder GraphQL operation template capture. Both v1 (POST body) and v2
+// (GET URL params) carry operationName + variables + extensions; we save the
+// template so we can replay it ourselves with our own variables.
+function captureSpotifyTemplate(details) {
+  if (!details.url.includes("/pathfinder/")) return;
+  let parsed;
+  try { parsed = new URL(details.url); } catch { return; }
+
+  let op = parsed.searchParams.get("operationName");
+  let variables = null, extensions = null;
+  try { variables = JSON.parse(parsed.searchParams.get("variables") || "null"); } catch {}
+  try { extensions = JSON.parse(parsed.searchParams.get("extensions") || "null"); } catch {}
+
+  if (!op || !extensions) {
+    const raw = details.requestBody?.raw?.[0]?.bytes;
+    if (raw) {
+      try {
+        const body = JSON.parse(new TextDecoder("utf-8").decode(raw));
+        op = op || body.operationName;
+        variables = variables || body.variables || null;
+        extensions = extensions || body.extensions || null;
+      } catch {}
+    }
+  }
+
+  if (!op || state.spotifyTemplates[op]) return;
+  if (!extensions?.persistedQuery?.sha256Hash) return;
+
+  state.spotifyTemplates[op] = {
+    endpoint: parsed.origin + parsed.pathname,
+    method: details.method || "POST",
+    variables: variables || {},
+    extensions,
+  };
+  console.log("[Munchy template]", op);
+  schedulePersistAuth();
+  scheduleAutoSync();
+}
+
+// ── Replay captured pathfinder operations ──────────────────────────────────
+
+async function spotifyReplay(operationName, vars = {}) {
+  const tpl = state.spotifyTemplates[operationName];
+  if (!tpl) {
+    throw new Error(`No template for "${operationName}" — open Spotify so the request can be observed`);
+  }
+  const variables = { ...tpl.variables, ...vars };
+  const headers = { ...state.spotifyHeaders };
+  // Pathfinder is strict about these; our captured values are not always trustworthy
+  // (telemetry endpoints can leak in different content-types). Hardcode the safe set.
+  headers["accept"] = "application/json";
+  let url = tpl.endpoint;
+  let init;
+  if (tpl.method === "POST") {
+    headers["content-type"] = "application/json;charset=UTF-8";
+    init = {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ operationName, variables, extensions: tpl.extensions }),
+      credentials: "include",
+    };
+  } else {
+    const u = new URL(tpl.endpoint);
+    u.searchParams.set("operationName", operationName);
+    u.searchParams.set("variables", JSON.stringify(variables));
+    u.searchParams.set("extensions", JSON.stringify(tpl.extensions));
+    url = u.toString();
+    delete headers["content-type"];
+    init = { method: "GET", headers, credentials: "include" };
+  }
+  const res = await fetch(url, init);
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(`Replay ${operationName} failed: ${res.status} ${text.slice(0, 200)}`);
+  }
+  // Feed responses through the same parsing path as live page traffic.
+  handleInterceptedBody(url, text);
+  try { return JSON.parse(text); } catch { return null; }
+}
+
+// ── Library sync (drives replays for full library) ─────────────────────────
+
+async function syncLibrary({ force = false } = {}) {
+  if (state.syncing) return { error: "Sync already in progress" };
+  if (!force) {
+    const since = Date.now() - state.lastSyncedAt;
+    if (state.lastSyncedAt && since < SYNC_COOLDOWN_MS) {
+      return { error: `Cooldown — last synced ${Math.round(since / 60000)}m ago` };
+    }
+  }
+  for (const op of REQUIRED_TEMPLATES) {
+    if (!state.spotifyTemplates[op]) {
+      return { error: `Template "${op}" not captured yet — keep using Spotify` };
+    }
+  }
+  if (!state.spotifyHeaders.authorization) {
+    return { error: "No Spotify session captured yet" };
+  }
+
+  state.syncing = true;
+  notifyStatus("Listing playlists...");
+  try {
+    const playlists = await listAllPlaylistsViaApi();
+    notifyStatus(`Liked Songs (1/${playlists.length + 1})`);
+    try { await fetchLikedSongsViaApi(); }
+    catch (e) { console.warn("[Munchy] liked songs:", e.message); }
+
+    for (let i = 0; i < playlists.length; i++) {
+      const pl = playlists[i];
+      notifyStatus(`${pl.name} (${i + 2}/${playlists.length + 1})`);
+      try { await fetchPlaylistTracksViaApi(pl.uri); }
+      catch (e) { console.warn("[Munchy] playlist", pl.uri, e.message); }
+    }
+    await autoSaveLibrary();
+    state.lastSyncedAt = Date.now();
+    schedulePersistAuth();
+    const stats = SpotifyCapture.getStats();
+    console.log("[Munchy] sync done:", stats);
+    return { ok: true, stats };
+  } catch (e) {
+    return { error: e.message };
+  } finally {
+    state.syncing = false;
+    notifyStatus("");
+    browser.runtime.sendMessage({ action: "SYNC_DONE" }).catch(() => {});
+  }
+}
+
+async function listAllPlaylistsViaApi() {
+  const playlists = [];
+  let offset = 0, total = Infinity;
+  const limit = 50;
+  while (offset < total) {
+    const res = await spotifyReplay("libraryV3", { offset, limit });
+    const lib = res?.data?.me?.libraryV3;
+    if (!lib) break;
+    const items = lib.items || [];
+    total = typeof lib.totalCount === "number" ? lib.totalCount : (offset + items.length);
+    for (const item of items) {
+      const inner = item.item?.data || item;
+      const uri = inner.uri || "";
+      if (uri.includes(":playlist:")) {
+        playlists.push({ uri, name: inner.name || uri });
+      }
+    }
+    if (items.length === 0) break;
+    offset += items.length;
+  }
+  return playlists;
+}
+
+// Walk a few levels of an item looking for an object that looks like a Track.
+// Pathfinder responses sometimes wrap the Track under .data, .track, .itemV2,
+// or several layers deep depending on the operation. Returns { node, uri } —
+// the URI may come from a wrapper (sometimes shipped as `_uri`) when the
+// Track itself doesn't carry one.
+function findTrackNode(item, depth = 0, foundUri = "") {
+  if (!item || typeof item !== "object" || depth > 4) return null;
+  const uri = item.uri || item._uri || foundUri;
+  const looksLikeTrack =
+    (item.name || item.title) &&
+    (item.__typename === "Track" ||
+     (typeof uri === "string" && uri.startsWith("spotify:track:")) ||
+     item.trackDuration || item.duration || item.duration_ms);
+  if (looksLikeTrack) return { node: item, uri };
+  for (const key of ["track", "data", "itemV2", "item", "node"]) {
+    if (item[key]) {
+      const found = findTrackNode(item[key], depth + 1, uri);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+async function fetchLikedSongsViaApi() {
+  let offset = 0, total = Infinity;
+  const limit = 100;
+  const tracks = [];
+  while (offset < total) {
+    const res = await spotifyReplay("fetchLibraryTracks", { offset, limit });
+    if (res?.errors) {
+      console.warn("[Munchy] fetchLibraryTracks GraphQL errors:", res.errors);
+      break;
+    }
+    const data = res?.data;
+    const node =
+      data?.me?.libraryV3?.tracks
+      || data?.me?.library?.tracks
+      || data?.me?.tracks
+      || null;
+    const items = node?.items || [];
+    total = typeof node?.totalCount === "number" ? node.totalCount : (offset + items.length);
+    for (const item of items) {
+      const found = findTrackNode(item);
+      if (!found) continue;
+      // Backfill uri from the wrapper if the Track itself didn't carry one.
+      const trackData = found.node.uri ? found.node : { ...found.node, uri: found.uri };
+      const t = SpotifyCapture._normalizeTrack(trackData, item.addedAt || item.added_at);
+      if (t) tracks.push(t);
+    }
+    if (items.length === 0) break;
+    offset += items.length;
+  }
+  console.log("[Munchy] liked songs:", tracks.length, "/", total);
+  SpotifyCapture.playlistTracks["__liked__"] = tracks;
+}
+
+async function fetchPlaylistTracksViaApi(uri) {
+  // fetchPlaylistContents responses don't echo the playlist URI, so we bind
+  // tracks to the playlist ourselves rather than relying on the parser.
+  const id = uri.split(":").pop();
+  let offset = 0, total = Infinity;
+  const limit = 100;
+  const tracks = [];
+  while (offset < total) {
+    const res = await spotifyReplay("fetchPlaylistContents", { uri, offset, limit });
+    const content = res?.data?.playlistV2?.content;
+    if (!content) break;
+    const items = content.items || [];
+    total = typeof content.totalCount === "number" ? content.totalCount : (offset + items.length);
+    for (const item of items) {
+      const found = findTrackNode(item);
+      if (!found) continue;
+      const trackData = found.node.uri ? found.node : { ...found.node, uri: found.uri };
+      const t = SpotifyCapture._normalizeTrack(trackData, item.addedAt);
+      if (t) tracks.push(t);
+    }
+    if (items.length === 0) break;
+    offset += items.length;
+  }
+  SpotifyCapture.playlistTracks[id] = tracks;
+}
+
+// ── Auto-sync debounce ─────────────────────────────────────────────────────
+
+let autoSyncTimer = null;
+function scheduleAutoSync() {
+  if (autoSyncTimer) clearTimeout(autoSyncTimer);
+  autoSyncTimer = setTimeout(() => {
+    autoSyncTimer = null;
+    if (state.syncing) return;
+    if (!REQUIRED_TEMPLATES.every((op) => state.spotifyTemplates[op])) return;
+    if (!state.spotifyHeaders.authorization) return;
+    if (state.lastSyncedAt && Date.now() - state.lastSyncedAt < SYNC_COOLDOWN_MS) return;
+    syncLibrary().catch((e) => console.warn("[Munchy] auto-sync:", e.message));
+  }, AUTO_SYNC_DEBOUNCE_MS);
+}
+
+// ── Persistence ────────────────────────────────────────────────────────────
+
+let persistTimer = null;
+function schedulePersistAuth() {
+  if (persistTimer) clearTimeout(persistTimer);
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    Storage.saveSpotifyAuth({
+      headers: state.spotifyHeaders,
+      templates: state.spotifyTemplates,
+      lastSyncedAt: state.lastSyncedAt,
+    }).catch(() => {});
+  }, 1000);
+}
+
+async function persistTokens() {
+  await Storage.saveTokens({
+    spotify: state.spotifyToken,
+    tidal: state.tidalToken,
+  });
+}
+
+// ── Header capture ─────────────────────────────────────────────────────────
 
 browser.webRequest.onBeforeSendHeaders.addListener(
   (details) => {
+    // Only mirror headers from pathfinder calls — other Spotify endpoints
+    // (telemetry, page assets) use different content-type/accept values and
+    // would clobber the ones our replay needs.
+    const isPathfinder = details.url.includes("/pathfinder/");
+    let changed = false;
     for (const header of details.requestHeaders) {
-      if (header.name.toLowerCase() === "authorization") {
+      const name = header.name.toLowerCase();
+      if (isPathfinder && SPOTIFY_REPLAY_HEADERS.has(name) && state.spotifyHeaders[name] !== header.value) {
+        state.spotifyHeaders[name] = header.value;
+        changed = true;
+      }
+      if (name === "authorization") {
         const match = header.value.match(/^Bearer\s+(.+)$/i);
         if (match && match[1] !== state.spotifyToken) {
           state.spotifyToken = match[1];
           persistTokens();
         }
-        break;
       }
+    }
+    if (changed) {
+      schedulePersistAuth();
+      scheduleAutoSync();
     }
     return {};
   },
@@ -66,7 +392,6 @@ browser.webRequest.onBeforeSendHeaders.addListener(
           state.tidalToken = match[1];
           persistTokens();
         }
-        break;
       }
     }
     return {};
@@ -81,20 +406,14 @@ browser.webRequest.onBeforeSendHeaders.addListener(
   ["requestHeaders"]
 );
 
-async function persistTokens() {
-  await Storage.saveTokens({
-    spotify: state.spotifyToken,
-    tidal: state.tidalToken,
-  });
+// ── Status broadcast ───────────────────────────────────────────────────────
+
+function notifyStatus(msg) {
+  state.syncStatus = msg;
+  browser.runtime.sendMessage({ action: "SYNC_STATUS", status: msg }).catch(() => {});
 }
 
-(async () => {
-  const saved = await Storage.getTokens();
-  if (saved.spotify && !state.spotifyToken) state.spotifyToken = saved.spotify;
-  if (saved.tidal && !state.tidalToken) state.tidalToken = saved.tidal;
-})();
-
-// ── Message handling ────────────────────────────────────────────────────────
+// ── Message handling ───────────────────────────────────────────────────────
 
 browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   switch (msg.action) {
@@ -102,12 +421,12 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       handleGetStatus().then(sendResponse);
       return true;
 
-    case "EXPORT_TIDAL":
-      handleExportTidal(msg.options).then(sendResponse);
+    case "SYNC_NOW":
+      syncLibrary({ force: true }).then(sendResponse);
       return true;
 
-    case "CAPTURE_ALL":
-      handleCaptureAll().then(sendResponse);
+    case "EXPORT_TIDAL":
+      handleExportTidal(msg.options).then(sendResponse);
       return true;
 
     case "GET_LIBRARY":
@@ -124,6 +443,8 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
     case "CLEAR_LIBRARY":
       SpotifyCapture.clear();
+      state.lastSyncedAt = 0;
+      schedulePersistAuth();
       Storage.clearLibrary().then(() => sendResponse({ ok: true }));
       return true;
 
@@ -131,58 +452,14 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       browser.tabs.create({ url: browser.runtime.getURL("popup/popup.html") });
       sendResponse({ ok: true });
       return false;
-
-    case "SPOTIFY_FETCH_INTERCEPTED":
-      handleInterceptedFetch(msg);
-      sendResponse({ ok: true });
-      return false;
-
-    case "SCRAPED_TRACKS":
-      handleScrapedTracks(msg);
-      sendResponse({ ok: true });
-      return false;
-
-    case "SPOTIFY_READY":
-    case "TIDAL_READY":
-      sendResponse({ ok: true });
-      return false;
-
-    case "PAUSE_CAPTURE":
-      state.capturePaused = true;
-      // Abort the current scroll in the content tab
-      browser.tabs.query({ url: "*://open.spotify.com/*" }).then((tabs) => {
-        if (tabs.length > 0) {
-          browser.tabs.sendMessage(tabs[0].id, { action: "ABORT_SCROLL" }).catch(() => {});
-        }
-      });
-      sendResponse({ ok: true });
-      return false;
-
-    case "RESUME_CAPTURE":
-      state.capturePaused = false;
-      resumeResolver?.();
-      resumeResolver = null;
-      sendResponse({ ok: true });
-      return false;
-
-    case "SCROLL_DONE":
-      sendResponse({ ok: true });
-      return false;
   }
 });
 
-// ── Intercepted fetch handler ───────────────────────────────────────────────
+// ── Intercepted body handler ───────────────────────────────────────────────
 
-function handleInterceptedFetch(msg) {
-  const { url, status, body } = msg;
-  if (status !== 200) return;
-
+function handleInterceptedBody(url, body) {
   let data;
-  try {
-    data = JSON.parse(body);
-  } catch {
-    return;
-  }
+  try { data = JSON.parse(body); } catch { return; }
 
   const before = SpotifyCapture.getStats();
   SpotifyCapture.processResponse(url, data);
@@ -194,52 +471,16 @@ function handleInterceptedFetch(msg) {
     albums: after.albums - before.albums,
     artists: after.artists - before.artists,
   };
-  // Notify popup if anything new was captured
   if (diff.tracks || diff.playlists || diff.albums || diff.artists) {
-    browser.runtime.sendMessage({
-      action: "CAPTURE_UPDATE",
-      stats: after,
-    }).catch(() => {});
+    browser.runtime.sendMessage({ action: "CAPTURE_UPDATE", stats: after }).catch(() => {});
   }
 }
 
-// ── Scraped tracks from DOM ─────────────────────────────────────────────────
-
-function handleScrapedTracks(msg) {
-  const { tracks, playlistId } = msg;
-  if (!Array.isArray(tracks) || tracks.length === 0) return;
-
-  if (playlistId) {
-    // Known page (liked songs or specific playlist) — store under that ID
-    SpotifyCapture.playlistTracks[playlistId] = tracks;
-  } else {
-    // Unknown page (album, artist, etc.) — add to generic "other" tracks
-    const before = SpotifyCapture.tracks.length;
-    for (const t of tracks) {
-      if (t.spotifyId && !SpotifyCapture.seenTrackIds.has(t.spotifyId)) {
-        SpotifyCapture.seenTrackIds.add(t.spotifyId);
-        SpotifyCapture.tracks.push(t);
-      }
-    }
-    if (SpotifyCapture.tracks.length === before) return;
-  }
-
-  // Auto-save to storage (debounced via microtask to avoid hammering)
-  if (!handleScrapedTracks._saving) {
-    handleScrapedTracks._saving = true;
-    setTimeout(() => {
-      handleScrapedTracks._saving = false;
-      autoSaveLibrary();
-    }, 500);
-  }
-}
-
-// ── Status ──────────────────────────────────────────────────────────────────
+// ── Status ─────────────────────────────────────────────────────────────────
 
 async function handleGetStatus() {
   const library = await Storage.getLibrary();
   const exportState = await Storage.getExportState();
-  const captured = SpotifyCapture.getStats();
 
   let libraryStats = null;
   let libraryPlaylists = [];
@@ -261,20 +502,25 @@ async function handleGetStatus() {
     }));
   }
 
+  const templatesReady = REQUIRED_TEMPLATES.every((op) => !!state.spotifyTemplates[op]);
+
   return {
     spotifyConnected: !!state.spotifyToken,
     tidalConnected: !!state.tidalToken,
-    captured,
     hasLibrary: !!library,
     libraryStats,
     libraryPlaylists,
     exportState,
     exporting: state.exporting,
-    capturing: state.capturing,
+    syncing: state.syncing,
+    syncStatus: state.syncStatus,
+    lastSyncedAt: state.lastSyncedAt,
+    templatesReady,
+    missingTemplates: REQUIRED_TEMPLATES.filter((op) => !state.spotifyTemplates[op]),
   };
 }
 
-// ── Auto-save captured data to storage ──────────────────────────────────────
+// ── Auto-save captured data to storage ─────────────────────────────────────
 
 async function autoSaveLibrary() {
   const playlists = [];
@@ -311,195 +557,13 @@ async function autoSaveLibrary() {
   };
 
   await Storage.saveLibrary(library);
-
-  // Notify popup
   browser.runtime.sendMessage({
     action: "CAPTURE_UPDATE",
     stats: SpotifyCapture.getStats(),
   }).catch(() => {});
 }
 
-// ── Capture All — automatic playlist navigation + scrolling ─────────────────
-
-async function handleCaptureAll() {
-  if (state.capturing) return { error: "Capture already in progress" };
-
-  const tabs = await browser.tabs.query({ url: "*://open.spotify.com/*" });
-  if (tabs.length === 0) {
-    return { error: "Open Spotify first (open.spotify.com)" };
-  }
-  const tabId = tabs[0].id;
-  state.capturing = true;
-  state.capturePaused = false;
-  resumeResolver = null;
-
-  try {
-    // Step 1: Discover playlists by scrolling the sidebar
-    sendCaptureProgress("Discovering playlists...", 0, 0);
-    const sidebarPlaylists = await scrollSidebarAndWait(tabId);
-    sendLog(`Discovered ${sidebarPlaylists.length} playlists from sidebar`);
-
-    // Also pick up any playlists the API interceptor already found (skip radios)
-    for (const pl of SpotifyCapture.playlists) {
-      if (!sidebarPlaylists.some((s) => s.spotifyId === pl.spotifyId)) {
-        if (/\bradio\b/i.test(pl.name)) continue;
-        sidebarPlaylists.push({ spotifyId: pl.spotifyId, name: pl.name });
-      }
-    }
-
-    // Build capture targets: liked songs + all discovered playlists
-    const targets = [
-      { url: "https://open.spotify.com/collection/tracks", name: "Liked Songs" },
-    ];
-    for (const pl of sidebarPlaylists) {
-      targets.push({
-        url: `https://open.spotify.com/playlist/${pl.spotifyId}`,
-        name: pl.name,
-      });
-    }
-
-    // Step 2: Navigate to each target, scroll, and verify
-    for (let i = 0; i < targets.length; i++) {
-      const target = targets[i];
-      sendCaptureProgress(target.name, i + 1, targets.length);
-
-      await navigateTab(tabId, target.url);
-      await sleep(2000);
-
-      const result = await scrollTabAndWait(tabId);
-      if (result) {
-        const { scrapedCount, expectedCount } = result;
-        if (expectedCount > 0) {
-          sendLog(`${target.name}: ${scrapedCount}/${expectedCount} tracks`);
-        } else if (scrapedCount > 0) {
-          sendLog(`${target.name}: ${scrapedCount} tracks`);
-        }
-      }
-
-      // Auto-save this playlist to storage immediately
-      await autoSaveLibrary();
-
-      // Check for pause between playlists
-      if (state.capturePaused) {
-        sendCaptureProgress("Paused", i + 1, targets.length);
-        await waitForResume();
-      }
-    }
-
-    state.capturing = false;
-    state.capturePaused = false;
-    resumeResolver = null;
-    browser.runtime.sendMessage({ action: "CAPTURE_DONE" }).catch(() => {});
-    return { ok: true, stats: SpotifyCapture.getStats() };
-  } catch (e) {
-    state.capturing = false;
-    state.capturePaused = false;
-    resumeResolver = null;
-    return { error: e.message };
-  }
-}
-
-function sendCaptureProgress(name, current, total) {
-  browser.runtime.sendMessage({
-    action: "CAPTURE_PROGRESS",
-    name, current, total,
-  }).catch(() => {});
-}
-
-function navigateTab(tabId, url) {
-  return new Promise((resolve) => {
-    const listener = (id, changeInfo) => {
-      if (id === tabId && changeInfo.status === "complete") {
-        clearTimeout(timer);
-        browser.tabs.onUpdated.removeListener(listener);
-        resolve();
-      }
-    };
-    browser.tabs.onUpdated.addListener(listener);
-    const timer = setTimeout(() => {
-      browser.tabs.onUpdated.removeListener(listener);
-      resolve();
-    }, 30000);
-    browser.tabs.update(tabId, { url });
-  });
-}
-
-async function scrollTabAndWait(tabId) {
-  let done = false;
-  let resolvePromise;
-  const promise = new Promise((resolve) => { resolvePromise = resolve; });
-
-  const cleanup = (result) => {
-    if (!done) {
-      done = true;
-      browser.runtime.onMessage.removeListener(onMsg);
-      resolvePromise(result || null);
-    }
-  };
-
-  const onMsg = (msg, sender) => {
-    if (msg.action === "SCROLL_DONE" && sender.tab?.id === tabId) {
-      cleanup({ scrapedCount: msg.scrapedCount || 0, expectedCount: msg.expectedCount || 0 });
-    }
-  };
-  browser.runtime.onMessage.addListener(onMsg);
-
-  // Timeout after 2 minutes
-  setTimeout(() => cleanup(null), 120000);
-
-  // Try sending AUTO_SCROLL with retries (content script may not be ready yet)
-  for (let attempt = 0; attempt < 5; attempt++) {
-    try {
-      await browser.tabs.sendMessage(tabId, { action: "AUTO_SCROLL" });
-      return promise; // Sent successfully, now wait for SCROLL_DONE
-    } catch {
-      await sleep(1000);
-    }
-  }
-  cleanup(null); // Failed after all retries
-  return promise;
-}
-
-async function scrollSidebarAndWait(tabId) {
-  let done = false;
-  let resolvePromise;
-  const promise = new Promise((resolve) => { resolvePromise = resolve; });
-
-  const cleanup = (result) => {
-    if (!done) {
-      done = true;
-      browser.runtime.onMessage.removeListener(onMsg);
-      resolvePromise(result || []);
-    }
-  };
-
-  const onMsg = (msg, sender) => {
-    if (msg.action === "SIDEBAR_DONE" && sender.tab?.id === tabId) {
-      cleanup(msg.playlists || []);
-    }
-  };
-  browser.runtime.onMessage.addListener(onMsg);
-
-  // Timeout after 30 seconds
-  setTimeout(() => cleanup([]), 30000);
-
-  for (let attempt = 0; attempt < 5; attempt++) {
-    try {
-      await browser.tabs.sendMessage(tabId, { action: "SCROLL_SIDEBAR" });
-      return promise;
-    } catch {
-      await sleep(1000);
-    }
-  }
-  cleanup([]);
-  return promise;
-}
-
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
-// ── Playlist Merge ──────────────────────────────────────────────────────────
+// ── Playlist merge ─────────────────────────────────────────────────────────
 
 async function handleMergePlaylists(sourceId, targetId) {
   const library = await Storage.getLibrary();
@@ -512,7 +576,6 @@ async function handleMergePlaylists(sourceId, targetId) {
   const source = library.playlists[sourceIdx];
   const target = library.playlists[targetIdx];
 
-  // Merge tracks (union — deduplicate by spotifyId)
   const seen = new Set((target.tracks || []).map((t) => t.spotifyId));
   for (const track of source.tracks || []) {
     if (!seen.has(track.spotifyId)) {
@@ -522,20 +585,19 @@ async function handleMergePlaylists(sourceId, targetId) {
   }
   target.trackCount = target.tracks.length;
 
-  // Remove source playlist
   library.playlists.splice(sourceIdx, 1);
   await Storage.saveLibrary(library);
   return { ok: true };
 }
 
-// ── Tidal Export ────────────────────────────────────────────────────────────
+// ── Tidal export ───────────────────────────────────────────────────────────
 
 async function handleExportTidal(options = {}) {
   if (state.exporting) return { error: "Export already in progress" };
   if (!state.tidalToken) return { error: "No Tidal token — open Tidal and browse around" };
 
   const library = await Storage.getLibrary();
-  if (!library) return { error: "No library data — save your captured Spotify data first" };
+  if (!library) return { error: "No library data — let Spotify sync first" };
 
   const selectedIds = new Set(options.selectedPlaylists || []);
   const exportAlbums = options.albums !== false;
@@ -572,7 +634,6 @@ async function handleExportTidal(options = {}) {
 
     for (const pl of selectedPlaylists) {
       if (pl.isLikedSongs) {
-        // Liked Songs → add to Tidal favorites
         const alreadyExported = await Storage.getExportedIds();
         const toExport = pl.tracks.filter((t) => !alreadyExported.has(t.spotifyId));
         const skipped = pl.tracks.length - toExport.length;
@@ -606,7 +667,6 @@ async function handleExportTidal(options = {}) {
         }
         sendLog(`Liked Songs: ${matched.length} matched, ${failed.length} unmatched` + (skipped ? `, ${skipped} skipped` : ""));
       } else {
-        // Regular playlist → find existing or create on Tidal, then add tracks
         sendProgress("EXPORT_PROGRESS", { phase: pl.name, current: 0, total: pl.tracks.length, name: "Finding/creating playlist..." });
         try {
           const { uuid: playlistId, etag: initialEtag, existed } = await TidalAPI.getOrCreatePlaylist(state.tidalToken, userId, pl.name, pl.description || "Imported from Spotify");
@@ -698,7 +758,7 @@ async function handleExportTidal(options = {}) {
   }
 }
 
-// ── Helpers ─────────────────────────────────────────────────────────────────
+// ── Helpers ────────────────────────────────────────────────────────────────
 
 function sendProgress(action, data) {
   browser.runtime.sendMessage({ action, ...data }).catch(() => {});

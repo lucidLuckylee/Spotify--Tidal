@@ -2,8 +2,6 @@
 
 const $ = (sel) => document.querySelector(sel);
 
-// ── Init ────────────────────────────────────────────────────────────────────
-
 document.addEventListener("DOMContentLoaded", () => {
   refreshStatus();
   setupListeners();
@@ -14,23 +12,9 @@ document.addEventListener("DOMContentLoaded", () => {
 async function refreshStatus() {
   const s = await browser.runtime.sendMessage({ action: "GET_STATUS" });
 
-  // Spotify
-  if (s.spotifyConnected) {
-    $("#spotify-icon").classList.add("connected");
-    $("#spotify-icon").title = "Spotify — Connected";
-  } else {
-    $("#spotify-icon").classList.remove("connected");
-    $("#spotify-icon").title = "Spotify — Not connected";
-  }
-
-  // Tidal
-  if (s.tidalConnected) {
-    $("#tidal-icon").classList.add("connected");
-    $("#tidal-icon").title = "Tidal — Connected";
-  } else {
-    $("#tidal-icon").classList.remove("connected");
-    $("#tidal-icon").title = "Tidal — Not connected";
-  }
+  // Service indicators
+  setIcon("#spotify-icon", s.spotifyConnected, "Spotify");
+  setIcon("#tidal-icon", s.tidalConnected, "Tidal");
 
   // Show onboarding if neither service is connected and no data
   const bothDisconnected = !s.spotifyConnected && !s.tidalConnected;
@@ -41,21 +25,13 @@ async function refreshStatus() {
     $("#onboarding").classList.add("hidden");
     $("#main-section").classList.remove("hidden");
   }
-
-  // Update onboarding badges
   $("#ob-spotify").className = s.spotifyConnected ? "ob-badge connected" : "ob-badge disconnected";
   $("#ob-tidal").className = s.tidalConnected ? "ob-badge connected" : "ob-badge disconnected";
 
-  // Capture in progress
-  if (s.capturing && captureState === "idle") {
-    captureState = "capturing";
-    const btn = $("#btn-capture-all");
-    btn.disabled = false;
-    btn.classList.add("capturing");
-    btn.textContent = "Capturing...";
-  }
+  // Sync status row
+  updateSyncStatus(s);
 
-  // Playlist list (auto-saved from capture)
+  // Playlist list
   if (s.hasLibrary && s.libraryPlaylists && s.libraryPlaylists.length > 0) {
     renderPlaylistSelect(s.libraryPlaylists, s.libraryStats || {});
     const plCount = s.libraryPlaylists.length;
@@ -71,7 +47,6 @@ async function refreshStatus() {
     $("#playlist-select").classList.add("hidden");
   }
 
-  // Export state
   if (s.exporting) {
     $("#btn-export").disabled = true;
     $("#btn-export").textContent = "Exporting...";
@@ -80,6 +55,49 @@ async function refreshStatus() {
   if (s.exportState?.completedAt && (s.exportState.tidalMatched.length > 0 || s.exportState.tidalFailed.length > 0)) {
     showExportResults(s.exportState);
   }
+}
+
+function setIcon(sel, connected, label) {
+  const el = $(sel);
+  if (connected) {
+    el.classList.add("connected");
+    el.title = `${label} — Connected`;
+  } else {
+    el.classList.remove("connected");
+    el.title = `${label} — Not connected`;
+  }
+}
+
+function updateSyncStatus(s) {
+  const text = $("#sync-status-text");
+  const btn = $("#btn-sync-now");
+
+  if (s.syncing) {
+    text.textContent = s.syncStatus || "Syncing…";
+    btn.disabled = true;
+    return;
+  }
+  if (!s.templatesReady) {
+    text.textContent = "Waiting for Spotify session…";
+    btn.disabled = true;
+    return;
+  }
+  if (s.lastSyncedAt) {
+    text.textContent = `Synced ${formatRelative(s.lastSyncedAt)}`;
+  } else {
+    text.textContent = "Ready — sync hasn't run yet";
+  }
+  btn.disabled = false;
+}
+
+function formatRelative(ts) {
+  const ms = Date.now() - ts;
+  const m = Math.round(ms / 60000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.round(h / 24)}d ago`;
 }
 
 function showExportResults(exportState) {
@@ -105,9 +123,7 @@ function showExportResults(exportState) {
 
 // ── Playlist selection ────────────────────────────────────────────────────────
 
-let captureState = "idle"; // "idle" | "capturing" | "paused"
-let captureProgressText = ""; // stored progress text for hover restore
-let playlistData = []; // current playlist list (mutable for merges)
+let playlistData = [];
 
 function renderPlaylistSelect(playlists, stats) {
   playlistData = playlists.map((pl) => ({ ...pl }));
@@ -126,12 +142,10 @@ function rebuildPlaylistList() {
     item.dataset.id = pl.spotifyId;
     item.dataset.checked = "true";
 
-    // Toggle indicator
     const dot = document.createElement("span");
     dot.className = "toggle-dot on";
     item.appendChild(dot);
 
-    // Info
     const info = document.createElement("div");
     info.className = "playlist-info";
     const name = document.createElement("div");
@@ -145,14 +159,12 @@ function rebuildPlaylistList() {
     info.appendChild(meta);
     item.appendChild(info);
 
-    // Badge
     const badge = document.createElement("span");
     badge.className = pl.isLikedSongs ? "playlist-badge favorites" : "playlist-badge";
     badge.textContent = pl.isLikedSongs ? "Favorites" : "Playlist";
     item.appendChild(badge);
 
-    // Click to toggle
-    item.addEventListener("click", (e) => {
+    item.addEventListener("click", () => {
       if (dragActive) return;
       const on = item.dataset.checked === "true";
       item.dataset.checked = on ? "false" : "true";
@@ -160,7 +172,6 @@ function rebuildPlaylistList() {
       dot.classList.toggle("on", !on);
     });
 
-    // Long press to start drag (not on liked songs)
     if (!pl.isLikedSongs) {
       setupLongPressDrag(item);
       item.addEventListener("dragover", onDragOver);
@@ -245,7 +256,6 @@ function onDrop(e) {
   const source = playlistData[sourceIdx];
   const target = playlistData[targetIdx];
 
-  // Merge: target keeps its name, track count is combined
   target.trackCount = (target.trackCount || 0) + (source.trackCount || 0);
   target.mergedFrom = [...(target.mergedFrom || []), source.spotifyId, ...(source.mergedFrom || [])];
 
@@ -281,19 +291,7 @@ function appendLog(text) {
 // ── Event listeners ─────────────────────────────────────────────────────────
 
 function setupListeners() {
-  $("#btn-capture-all").addEventListener("click", captureAll);
-
-  // Hover effect: show "Pause" when capturing
-  $("#btn-capture-all").addEventListener("mouseenter", () => {
-    if (captureState === "capturing") {
-      $("#btn-capture-all").textContent = "Pause";
-    }
-  });
-  $("#btn-capture-all").addEventListener("mouseleave", () => {
-    if (captureState === "capturing") {
-      $("#btn-capture-all").textContent = captureProgressText || "Capturing...";
-    }
-  });
+  $("#btn-sync-now").addEventListener("click", syncNow);
   $("#btn-export").addEventListener("click", startExport);
   $("#btn-export-json").addEventListener("click", exportJson);
   $("#btn-clear").addEventListener("click", clearLibrary);
@@ -332,77 +330,23 @@ function setupListeners() {
   });
 
   browser.runtime.onMessage.addListener((msg) => {
-    if (msg.action === "CAPTURE_UPDATE") {
+    if (msg.action === "CAPTURE_UPDATE" || msg.action === "SYNC_DONE" || msg.action === "SYNC_STATUS") {
       refreshStatus();
     } else if (msg.action === "EXPORT_PROGRESS") {
       updateExportProgress(msg);
     } else if (msg.action === "LOG") {
       appendLog(msg.text);
-    } else if (msg.action === "CAPTURE_PROGRESS") {
-      const btn = $("#btn-capture-all");
-      if (msg.name === "Paused") {
-        captureState = "paused";
-        btn.classList.remove("capturing");
-        btn.classList.add("paused");
-        btn.textContent = msg.total > 0 ? `Paused (${msg.current}/${msg.total})` : "Paused";
-        captureProgressText = btn.textContent;
-      } else {
-        captureState = "capturing";
-        btn.classList.remove("paused");
-        btn.classList.add("capturing");
-        captureProgressText = msg.total > 0 ? `${msg.name} (${msg.current}/${msg.total})` : msg.name;
-        btn.textContent = captureProgressText;
-      }
-      btn.disabled = false;
-    } else if (msg.action === "CAPTURE_DONE") {
-      captureState = "idle";
-      captureProgressText = "";
-      const btn = $("#btn-capture-all");
-      btn.textContent = "Capture All";
-      btn.disabled = false;
-      btn.classList.remove("capturing", "paused");
-      refreshStatus();
     }
   });
 }
 
-// ── Capture All (auto-scroll Spotify tab) ──────────────────────────────────
-
-async function captureAll() {
-  const btn = $("#btn-capture-all");
-
-  if (captureState === "capturing") {
-    // Pause
-    browser.runtime.sendMessage({ action: "PAUSE_CAPTURE" });
-    return;
+async function syncNow() {
+  const btn = $("#btn-sync-now");
+  btn.disabled = true;
+  const result = await browser.runtime.sendMessage({ action: "SYNC_NOW" });
+  if (result?.error) {
+    $("#sync-status-text").textContent = result.error;
   }
-
-  if (captureState === "paused") {
-    // Resume
-    captureState = "capturing";
-    btn.classList.remove("paused");
-    btn.classList.add("capturing");
-    btn.textContent = captureProgressText || "Resuming...";
-    browser.runtime.sendMessage({ action: "RESUME_CAPTURE" });
-    return;
-  }
-
-  // Start new capture
-  captureState = "capturing";
-  btn.classList.add("capturing");
-  btn.textContent = "Starting...";
-
-  const result = await browser.runtime.sendMessage({ action: "CAPTURE_ALL" });
-
-  if (result.error) {
-    alert(result.error);
-  }
-
-  captureState = "idle";
-  captureProgressText = "";
-  btn.textContent = "Capture All";
-  btn.disabled = false;
-  btn.classList.remove("capturing", "paused");
   refreshStatus();
 }
 
@@ -550,7 +494,6 @@ function openTidalSearch(track) {
 }
 
 function openAllTidalSearches() {
-  // Open in batches to avoid overwhelming the browser
   const MAX_TABS = 20;
   const toOpen = unmatchedTracks.slice(0, MAX_TABS);
   for (const t of toOpen) {
@@ -560,4 +503,3 @@ function openAllTidalSearches() {
     alert(`Opened first ${MAX_TABS} of ${unmatchedTracks.length}. Close some tabs and click again for the rest.`);
   }
 }
-

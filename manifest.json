@@ -31,18 +31,6 @@
     ],
     "persistent": true
   },
-  "content_scripts": [
-    {
-      "matches": ["*://open.spotify.com/*"],
-      "js": ["content/spotify.js"],
-      "run_at": "document_start"
-    },
-    {
-      "matches": ["*://listen.tidal.com/*"],
-      "js": ["content/tidal.js"],
-      "run_at": "document_idle"
-    }
-  ],
   "browser_action": {
     "default_icon": {
       "48": "icons/icon-48.svg",
