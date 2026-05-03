@@ -460,12 +460,8 @@ async function handleGetStatus() {
   let libraryStats = null;
   let libraryPlaylists = [];
   if (library) {
-    const liked = (library.playlists || []).find((p) => p.isLikedSongs);
-    const regular = (library.playlists || []).filter((p) => !p.isLikedSongs);
     libraryStats = {
-      tracks: liked ? liked.tracks.length : 0,
       albums: (library.albums || []).length,
-      playlists: regular.length,
       artists: (library.artists || []).length,
       importedAt: library.importedAt,
     };
