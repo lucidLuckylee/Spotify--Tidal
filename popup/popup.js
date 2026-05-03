@@ -153,8 +153,7 @@ function rebuildPlaylistList() {
     name.textContent = pl.name;
     const meta = document.createElement("div");
     meta.className = "playlist-meta";
-    const mergedLabel = pl.mergedFrom ? ` (merged ${pl.mergedFrom.length + 1})` : "";
-    meta.textContent = `${pl.trackCount.toLocaleString()} tracks${mergedLabel}`;
+    meta.textContent = `${pl.trackCount.toLocaleString()} tracks`;
     info.appendChild(name);
     info.appendChild(meta);
     item.appendChild(info);
@@ -165,110 +164,14 @@ function rebuildPlaylistList() {
     item.appendChild(badge);
 
     item.addEventListener("click", () => {
-      if (dragActive) return;
       const on = item.dataset.checked === "true";
       item.dataset.checked = on ? "false" : "true";
       item.classList.toggle("selected", !on);
       dot.classList.toggle("on", !on);
     });
 
-    if (!pl.isLikedSongs) {
-      setupLongPressDrag(item);
-      item.addEventListener("dragover", onDragOver);
-      item.addEventListener("dragleave", onDragLeave);
-      item.addEventListener("drop", onDrop);
-    }
-
     list.appendChild(item);
   }
-}
-
-// ── Long-press drag & drop merge ───────────────────────────────────────────
-
-let dragSourceId = null;
-let dragActive = false;
-let longPressTimer = null;
-
-function setupLongPressDrag(item) {
-  item.addEventListener("mousedown", (e) => {
-    if (e.button !== 0) return;
-    longPressTimer = setTimeout(() => {
-      longPressTimer = null;
-      dragActive = true;
-      item.draggable = true;
-      item.classList.add("drag-ready");
-    }, 400);
-  });
-
-  item.addEventListener("mouseup", () => clearLongPress());
-  item.addEventListener("mouseleave", () => clearLongPress());
-
-  item.addEventListener("dragstart", (e) => {
-    if (!dragActive) { e.preventDefault(); return; }
-    dragSourceId = item.dataset.id;
-    item.classList.add("dragging");
-    e.dataTransfer.effectAllowed = "move";
-    e.dataTransfer.setData("text/plain", dragSourceId);
-  });
-
-  item.addEventListener("dragend", () => {
-    item.draggable = false;
-    item.classList.remove("dragging", "drag-ready");
-    dragActive = false;
-    dragSourceId = null;
-    document.querySelectorAll(".drag-over").forEach((el) => el.classList.remove("drag-over"));
-  });
-}
-
-function clearLongPress() {
-  if (longPressTimer) {
-    clearTimeout(longPressTimer);
-    longPressTimer = null;
-  }
-}
-
-function onDragOver(e) {
-  e.preventDefault();
-  const item = e.target.closest(".playlist-item");
-  if (!item || item.dataset.id === dragSourceId) return;
-  e.dataTransfer.dropEffect = "move";
-  item.classList.add("drag-over");
-}
-
-function onDragLeave(e) {
-  const item = e.target.closest(".playlist-item");
-  if (item) item.classList.remove("drag-over");
-}
-
-function onDrop(e) {
-  e.preventDefault();
-  const targetItem = e.target.closest(".playlist-item");
-  if (!targetItem) return;
-  targetItem.classList.remove("drag-over");
-
-  const targetId = targetItem.dataset.id;
-  if (!dragSourceId || dragSourceId === targetId) return;
-
-  const sourceIdx = playlistData.findIndex((p) => p.spotifyId === dragSourceId);
-  const targetIdx = playlistData.findIndex((p) => p.spotifyId === targetId);
-  if (sourceIdx < 0 || targetIdx < 0) return;
-
-  const source = playlistData[sourceIdx];
-  const target = playlistData[targetIdx];
-
-  target.trackCount = (target.trackCount || 0) + (source.trackCount || 0);
-  target.mergedFrom = [...(target.mergedFrom || []), source.spotifyId, ...(source.mergedFrom || [])];
-
-  browser.runtime.sendMessage({
-    action: "MERGE_PLAYLISTS",
-    sourceId: source.spotifyId,
-    targetId: target.spotifyId,
-  }).catch(() => {});
-
-  playlistData.splice(sourceIdx, 1);
-  rebuildPlaylistList();
-  dragSourceId = null;
-  dragActive = false;
 }
 
 function getSelectedPlaylistIds() {

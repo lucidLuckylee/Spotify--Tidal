@@ -414,10 +414,6 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       Storage.getExportState().then(sendResponse);
       return true;
 
-    case "MERGE_PLAYLISTS":
-      handleMergePlaylists(msg.sourceId, msg.targetId).then(sendResponse);
-      return true;
-
     case "CLEAR_LIBRARY":
       SpotifyCapture.clear();
       state.lastSyncedAt = 0;
@@ -513,33 +509,6 @@ async function autoSaveLibrary() {
     action: "CAPTURE_UPDATE",
     stats: SpotifyCapture.getStats(),
   }).catch(() => {});
-}
-
-// ── Playlist merge ─────────────────────────────────────────────────────────
-
-async function handleMergePlaylists(sourceId, targetId) {
-  const library = await Storage.getLibrary();
-  if (!library || !library.playlists) return { error: "No library" };
-
-  const sourceIdx = library.playlists.findIndex((p) => p.spotifyId === sourceId);
-  const targetIdx = library.playlists.findIndex((p) => p.spotifyId === targetId);
-  if (sourceIdx < 0 || targetIdx < 0) return { error: "Playlist not found" };
-
-  const source = library.playlists[sourceIdx];
-  const target = library.playlists[targetIdx];
-
-  const seen = new Set((target.tracks || []).map((t) => t.spotifyId));
-  for (const track of source.tracks || []) {
-    if (!seen.has(track.spotifyId)) {
-      target.tracks.push(track);
-      seen.add(track.spotifyId);
-    }
-  }
-  target.trackCount = target.tracks.length;
-
-  library.playlists.splice(sourceIdx, 1);
-  await Storage.saveLibrary(library);
-  return { ok: true };
 }
 
 // ── Tidal export ───────────────────────────────────────────────────────────

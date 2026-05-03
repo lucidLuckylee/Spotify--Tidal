@@ -369,26 +369,6 @@ button:disabled {
   color: #1db954;
 }
 
-/* Drag & drop states */
-.playlist-item.drag-ready {
-  cursor: grabbing;
-  background: #252525;
-}
-
-.playlist-item.dragging {
-  opacity: 0.3;
-}
-
-.playlist-item.drag-over {
-  background: #1db95425;
-  box-shadow: inset 0 0 0 1px #1db95460;
-  border-radius: 4px;
-}
-
-.playlist-item.drag-over .playlist-name {
-  color: #1db954;
-}
-
 /* Toggle switch (albums, artists) */
 .toggle-switch {
   position: relative;
