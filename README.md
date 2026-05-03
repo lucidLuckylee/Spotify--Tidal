@@ -41,3 +41,9 @@ to Spotify and Tidal themselves.
 ## License
 
 GPL-3.0 — see `LICENSE`.
+
+## Disclaimer
+
+This is an independent, unofficial tool. It is not affiliated with,
+endorsed by, or sponsored by Spotify AB or Tidal Music AS. "Spotify" and
+"Tidal" are trademarks of their respective owners.
