@@ -2,7 +2,7 @@
   "private": true,
   "scripts": {
     "lint": "web-ext lint --source-dir . --ignore-files 'tests/**' 'vitest.config.js' 'package.json' 'package-lock.json' 'node_modules/**' 'spotify_tidal_frontend_prototype/**' '.claude/**'",
-    "build": "web-ext build --source-dir . --artifacts-dir ../dist --ignore-files 'tests/**' 'vitest.config.js' 'package.json' 'package-lock.json' 'node_modules/**' 'spotify_tidal_frontend_prototype/**' '.claude/**'",
+    "build": "web-ext build --source-dir . --artifacts-dir ../dist --ignore-files 'tests/**' 'vitest.config.js' 'package.json' 'package-lock.json' 'node_modules/**' 'spotify_tidal_frontend_prototype/**' '.claude/**' 'docs/screenshots/**' 'SUBMISSION.md'",
     "test": "vitest run",
     "test:watch": "vitest"
   },
