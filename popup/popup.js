@@ -526,11 +526,18 @@ function renderLibrary(s) {
     artistsRow.classList.toggle("on", exportArtists);
   });
 
-  const txBtn = h("button", { class: "tx-btn", title: "Export to Tidal", "aria-label": "Export to Tidal", onclick: startExport });
+  const txBtn = h("button", { class: "tx-btn", "aria-label": "Export to Tidal", onclick: startExport });
   txBtn.appendChild(h("span", { class: "tx-icon", "aria-hidden": "true" },
     rawSvg(`<svg viewBox="0 0 24 24" fill="currentColor" width="22" height="22" xmlns="http://www.w3.org/2000/svg"><path d="M8 5.5v13c0 .8.9 1.3 1.6.9l11-6.5c.6-.4.6-1.3 0-1.7l-11-6.5C8.9 4.2 8 4.7 8 5.5z"/></svg>`),
   ));
   txBtn.appendChild(h("span", { class: "tx-scan", "aria-hidden": "true" }));
+
+  // Wrapper holds the button + custom tooltip. The tooltip can't sit inside
+  // .tx-btn because that element has overflow:hidden for the scan animation.
+  const txWrap = h("div", { class: "tx-wrap" },
+    txBtn,
+    h("span", { class: "tx-tip", role: "tooltip" }, "Export to Tidal"),
+  );
 
   return h("div", { class: "body" },
     h("div", { class: "section" },
@@ -538,7 +545,7 @@ function renderLibrary(s) {
       list,
       h("div", { class: "extras-row" },
         h("div", { class: "extras-toggles" }, albumsRow, artistsRow),
-        txBtn,
+        txWrap,
       ),
     ),
   );
@@ -598,6 +605,34 @@ function renderExporting(s) {
 
 // ── Results screen ─────────────────────────────────────────────────────────
 
+// Persisted across popup open/close so the user can re-open the popup
+// and pick up where they left off in the review list. Keyed by group name,
+// so renames or new playlists fall back to the default (expanded).
+const REVIEW_STATE_KEY = "munchy:reviewState";
+
+function loadReviewState() {
+  try {
+    const raw = localStorage.getItem(REVIEW_STATE_KEY);
+    if (!raw) return { collapsed: [], scroll: 0 };
+    const p = JSON.parse(raw) || {};
+    return {
+      collapsed: Array.isArray(p.collapsed) ? p.collapsed : [],
+      scroll: typeof p.scroll === "number" ? p.scroll : 0,
+    };
+  } catch {
+    return { collapsed: [], scroll: 0 };
+  }
+}
+
+function saveReviewState(patch) {
+  try {
+    localStorage.setItem(REVIEW_STATE_KEY, JSON.stringify({
+      ...loadReviewState(),
+      ...patch,
+    }));
+  } catch {}
+}
+
 function reasonClass(r) {
   if (!r) return "weak";
   const text = String(r);
@@ -644,9 +679,25 @@ function renderResults(s) {
     });
   }
   const groups = [...groupsMap.entries()].map(([name, tracks]) => ({ name, tracks }));
-  const open = new Set(groups.map((g) => g.name));
+  const persisted = loadReviewState();
+  const collapsedNames = new Set(persisted.collapsed);
+  const open = new Set(groups.map((g) => g.name).filter((n) => !collapsedNames.has(n)));
+
+  const persistCollapsed = () => {
+    const collapsed = groups.map((g) => g.name).filter((n) => !open.has(n));
+    saveReviewState({ collapsed });
+  };
 
   const reviewList = h("div", { class: "review-list" });
+
+  // Debounced scroll persistence — saves at most every 150 ms while scrolling.
+  let scrollTimer = null;
+  reviewList.addEventListener("scroll", () => {
+    clearTimeout(scrollTimer);
+    scrollTimer = setTimeout(() => {
+      saveReviewState({ scroll: reviewList.scrollTop });
+    }, 150);
+  });
 
   function renderGroups() {
     clear(reviewList);
@@ -660,6 +711,7 @@ function renderResults(s) {
         "aria-expanded": isOpen ? "true" : "false",
         onclick: () => {
           if (open.has(g.name)) open.delete(g.name); else open.add(g.name);
+          persistCollapsed();
           renderGroups();
         },
       },
@@ -703,6 +755,12 @@ function renderResults(s) {
     }
   }
   renderGroups();
+
+  // Restore scroll once the reviewList is attached to the DOM (the slider
+  // mounts the body after renderResults returns). rAF fires after layout.
+  requestAnimationFrame(() => {
+    if (reviewList.isConnected) reviewList.scrollTop = persisted.scroll || 0;
+  });
 
   return h("div", { class: "body" },
     h("div", { class: "result-summary" },
