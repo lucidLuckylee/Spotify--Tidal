@@ -1,15 +1,23 @@
-// Background script — passive Spotify capture + Tidal export.
+// Background script — Spotify library sync via replayed pathfinder calls,
+// plus Tidal export.
 //
-// We never inject into the page or scroll its DOM. Instead we observe XHR
-// traffic with webRequest.filterResponseData to:
-//   1. Capture pathfinder operation templates (operationName + sha256Hash +
-//      example variables) plus the request headers needed to replay them.
-//   2. Read response bodies to opportunistically populate the library.
+// We never inject into the page. Live Spotify XHR traffic is observed with
+// webRequest listeners to capture two things:
+//   1. Pathfinder operation templates (operationName + sha256Hash + sample
+//      variables) — recorded by onBeforeRequest from the request URL/body.
+//   2. The request headers needed to replay those operations (authorization,
+//      client-token, app-platform, spotify-app-version, accept-language) —
+//      recorded by onBeforeSendHeaders.
 //
-// Once we have enough templates + headers, we replay them ourselves to
-// paginate the user's full library — playlists, liked songs, each playlist's
-// tracks. This kicks off automatically (debounced) as the user uses Spotify
-// and is rate-limited by a sync cooldown.
+// Once the required templates and a valid authorization header are in hand,
+// a debounced auto-sync replays the operations with our own pagination
+// variables to walk the full library — playlists, albums, artists, liked
+// songs, and each playlist's tracks. Auto-sync is rate-limited by a 1-hour
+// cooldown; the popup's "Sync now" forces a run regardless.
+//
+// Response bodies are no longer intercepted via filterResponseData; the
+// replay drivers parse their own responses and populate SpotifyCapture
+// directly.
 
 const SYNC_COOLDOWN_MS = 60 * 60 * 1000;       // throttle auto-syncs
 const AUTO_SYNC_DEBOUNCE_MS = 8_000;           // settle period after captures
