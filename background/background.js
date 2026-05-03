@@ -20,9 +20,7 @@ const SPOTIFY_REPLAY_HEADERS = new Set([
   "client-token",
   "app-platform",
   "spotify-app-version",
-  "accept",
   "accept-language",
-  "content-type",
 ]);
 
 const state = {
