@@ -9,41 +9,69 @@ document.addEventListener("DOMContentLoaded", () => {
 
 // ── Status refresh ──────────────────────────────────────────────────────────
 
+const CHECKS = [
+  {
+    label: "Log into Spotify",
+    url: "https://open.spotify.com",
+    linkText: "open.spotify.com",
+    isDone: (s) => s.spotifyConnected,
+  },
+  {
+    label: "Open Your Library",
+    url: "https://open.spotify.com/collection/playlists",
+    linkText: "spotify.com/collection",
+    isDone: (s) => !s.missingTemplates?.includes("libraryV3"),
+  },
+  {
+    label: "Open Liked Songs",
+    url: "https://open.spotify.com/collection/tracks",
+    linkText: "spotify.com/collection/tracks",
+    isDone: (s) => !s.missingTemplates?.includes("fetchLibraryTracks"),
+  },
+  {
+    label: "Open any playlist on Spotify",
+    url: "https://open.spotify.com",
+    linkText: "open a playlist",
+    isDone: (s) => !s.missingTemplates?.includes("fetchPlaylistContents"),
+  },
+  {
+    label: "Log into Tidal",
+    url: "https://listen.tidal.com",
+    linkText: "listen.tidal.com",
+    isDone: (s) => s.tidalConnected,
+  },
+];
+
 async function refreshStatus() {
   const s = await browser.runtime.sendMessage({ action: "GET_STATUS" });
 
-  // Service indicators
   setIcon("#spotify-icon", s.spotifyConnected, "Spotify");
   setIcon("#tidal-icon", s.tidalConnected, "Tidal");
 
-  // Show onboarding if neither service is connected and no data
-  const bothDisconnected = !s.spotifyConnected && !s.tidalConnected;
-  if (bothDisconnected && !s.hasLibrary) {
-    $("#onboarding").classList.remove("hidden");
-    $("#main-section").classList.add("hidden");
-  } else {
-    $("#onboarding").classList.add("hidden");
+  const states = CHECKS.map((c) => c.isDone(s));
+  const allReady = states.every(Boolean);
+
+  if (allReady) {
+    $("#readiness").classList.add("hidden");
     $("#main-section").classList.remove("hidden");
+  } else {
+    $("#readiness").classList.remove("hidden");
+    $("#main-section").classList.add("hidden");
+    const doneCount = states.filter(Boolean).length;
+    $("#readiness-count").textContent = `${doneCount} / ${states.length}`;
+    renderChecks(states);
   }
-  $("#ob-spotify").className = s.spotifyConnected ? "ob-badge connected" : "ob-badge disconnected";
-  $("#ob-tidal").className = s.tidalConnected ? "ob-badge connected" : "ob-badge disconnected";
 
-  // Sync status row
-  updateSyncStatus(s);
-
-  // Playlist list
   if (s.hasLibrary && s.libraryPlaylists && s.libraryPlaylists.length > 0) {
     renderPlaylistSelect(s.libraryPlaylists, s.libraryStats || {});
     const plCount = s.libraryPlaylists.length;
     const trackCount = s.libraryPlaylists.reduce((sum, p) => sum + (p.trackCount || 0), 0);
     $("#playlist-summary").textContent = `${plCount} playlists, ${trackCount.toLocaleString()} tracks`;
     $("#btn-export").disabled = !s.tidalConnected || s.exporting;
-    $("#export-empty-hint").classList.add("hidden");
     $("#playlist-select").classList.remove("hidden");
   } else {
     $("#playlist-summary").textContent = "";
     $("#btn-export").disabled = true;
-    $("#export-empty-hint").classList.remove("hidden");
     $("#playlist-select").classList.add("hidden");
   }
 
@@ -57,6 +85,51 @@ async function refreshStatus() {
   }
 }
 
+function renderChecks(states) {
+  const list = $("#check-list");
+  list.innerHTML = "";
+
+  CHECKS.forEach((c, i) => {
+    const done = states[i];
+    const prevDone = i === 0 ? true : states[i - 1];
+
+    const li = document.createElement("li");
+    li.className = "check-row" + (done ? " done" : "") + (prevDone ? " connected" : "");
+
+    const mark = document.createElement("span");
+    mark.className = "check-mark";
+    mark.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    li.appendChild(mark);
+
+    const label = document.createElement("span");
+    label.className = "check-text";
+    label.textContent = c.label;
+    li.appendChild(label);
+
+    if (!done) {
+      const arrow = document.createElement("span");
+      arrow.className = "check-arrow";
+      arrow.textContent = "→";
+      arrow.setAttribute("aria-hidden", "true");
+      li.appendChild(arrow);
+
+      li.tabIndex = 0;
+      li.setAttribute("role", "button");
+      li.setAttribute("aria-label", `${c.label} — open`);
+      const open = () => browser.tabs.create({ url: c.url });
+      li.addEventListener("click", open);
+      li.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          open();
+        }
+      });
+    }
+
+    list.appendChild(li);
+  });
+}
+
 function setIcon(sel, connected, label) {
   const el = $(sel);
   if (connected) {
@@ -66,38 +139,6 @@ function setIcon(sel, connected, label) {
     el.classList.remove("connected");
     el.title = `${label} — Not connected`;
   }
-}
-
-function updateSyncStatus(s) {
-  const text = $("#sync-status-text");
-  const btn = $("#btn-sync-now");
-
-  if (s.syncing) {
-    text.textContent = s.syncStatus || "Syncing…";
-    btn.disabled = true;
-    return;
-  }
-  if (!s.templatesReady) {
-    text.textContent = "Waiting for Spotify session…";
-    btn.disabled = true;
-    return;
-  }
-  if (s.lastSyncedAt) {
-    text.textContent = `Synced ${formatRelative(s.lastSyncedAt)}`;
-  } else {
-    text.textContent = "Ready — sync hasn't run yet";
-  }
-  btn.disabled = false;
-}
-
-function formatRelative(ts) {
-  const ms = Date.now() - ts;
-  const m = Math.round(ms / 60000);
-  if (m < 1) return "just now";
-  if (m < 60) return `${m}m ago`;
-  const h = Math.round(m / 60);
-  if (h < 24) return `${h}h ago`;
-  return `${Math.round(h / 24)}d ago`;
 }
 
 function showExportResults(exportState) {
@@ -194,20 +235,11 @@ function appendLog(text) {
 // ── Event listeners ─────────────────────────────────────────────────────────
 
 function setupListeners() {
-  $("#btn-sync-now").addEventListener("click", syncNow);
   $("#btn-export").addEventListener("click", startExport);
   $("#btn-export-json").addEventListener("click", exportJson);
   $("#btn-clear").addEventListener("click", clearLibrary);
   $("#btn-view-unmatched").addEventListener("click", showUnmatched);
   $("#btn-search-all-tidal").addEventListener("click", openAllTidalSearches);
-  $("#link-spotify").addEventListener("click", (e) => {
-    e.preventDefault();
-    browser.tabs.create({ url: "https://open.spotify.com" });
-  });
-  $("#link-tidal").addEventListener("click", (e) => {
-    e.preventDefault();
-    browser.tabs.create({ url: "https://listen.tidal.com" });
-  });
   $("#select-all").addEventListener("click", (e) => {
     e.preventDefault();
     document.querySelectorAll("#playlist-list .playlist-item").forEach((el) => {
@@ -241,16 +273,6 @@ function setupListeners() {
       appendLog(msg.text);
     }
   });
-}
-
-async function syncNow() {
-  const btn = $("#btn-sync-now");
-  btn.disabled = true;
-  const result = await browser.runtime.sendMessage({ action: "SYNC_NOW" });
-  if (result?.error) {
-    $("#sync-status-text").textContent = result.error;
-  }
-  refreshStatus();
 }
 
 // ── Export ───────────────────────────────────────────────────────────────────

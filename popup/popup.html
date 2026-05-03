@@ -20,37 +20,14 @@
     </div>
   </header>
 
-  <!-- Onboarding / landing page -->
-  <section id="onboarding" class="hidden">
-    <h2>Getting Started</h2>
-    <p class="onboarding-text">Transfer your Spotify library to Tidal in three steps:</p>
-    <div class="onboarding-steps">
-      <div class="onboarding-step">
-        <span class="step-num">1</span>
-        <div>
-          <strong>Log into Spotify</strong>
-          <p>Open <a href="#" id="link-spotify">open.spotify.com</a> and sign in. The extension will detect your session automatically.</p>
-        </div>
-      </div>
-      <div class="onboarding-step">
-        <span class="step-num">2</span>
-        <div>
-          <strong>Log into Tidal</strong>
-          <p>Open <a href="#" id="link-tidal">listen.tidal.com</a> and sign in. Browse around briefly so the extension can capture your session.</p>
-        </div>
-      </div>
-      <div class="onboarding-step">
-        <span class="step-num">3</span>
-        <div>
-          <strong>Capture & Export</strong>
-          <p>Hit "Capture All" to grab your Spotify library, then export it to Tidal. Tracks are matched automatically.</p>
-        </div>
-      </div>
+  <!-- Readiness landing -->
+  <section id="readiness" class="hidden">
+    <div class="readiness-head">
+      <h2 class="readiness-title">Almost there</h2>
+      <span class="readiness-count" id="readiness-count">0 / 5</span>
     </div>
-    <div class="onboarding-status">
-      <span id="ob-spotify" class="ob-badge disconnected">Spotify</span>
-      <span id="ob-tidal" class="ob-badge disconnected">Tidal</span>
-    </div>
+    <span class="readiness-rule"></span>
+    <ol class="check-list" id="check-list"></ol>
   </section>
 
   <!-- Main section -->
@@ -58,10 +35,6 @@
     <div class="section-header-row">
       <h2 id="playlist-heading">Spotify Library</h2>
       <span class="playlist-summary" id="playlist-summary"></span>
-    </div>
-    <div id="sync-status" class="sync-status">
-      <span id="sync-status-text" class="sync-status-text">Waiting for Spotify session…</span>
-      <button id="btn-sync-now" class="btn-secondary" disabled title="Force a fresh sync">Sync now</button>
     </div>
     <div class="btn-row" style="margin-bottom:8px">
       <button id="btn-export-json" class="btn-secondary">Export JSON</button>
@@ -87,7 +60,6 @@
         <span class="toggle-count" id="artist-count"></span>
       </label>
     </div>
-    <p id="export-empty-hint" class="hint">Open Spotify and browse around — your library will sync automatically.</p>
     <button id="btn-export" disabled>Export to Tidal</button>
     <div class="progress-area hidden" id="export-progress">
       <div class="progress-bar"><div class="progress-fill" id="export-fill"></div></div>
