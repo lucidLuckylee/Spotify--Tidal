@@ -44,36 +44,14 @@ const state = {
   if (auth.lastSyncedAt) state.lastSyncedAt = auth.lastSyncedAt;
 })();
 
-// ── Capture Spotify XHR responses ──────────────────────────────────────────
-// Firefox-only filterResponseData: read response bodies from the background
-// without touching the page (so no CSP fight, no script injection).
+// ── Capture Spotify pathfinder operation templates ─────────────────────────
 
 browser.webRequest.onBeforeRequest.addListener(
   (details) => {
     captureSpotifyTemplate(details);
-    const filter = browser.webRequest.filterResponseData(details.requestId);
-    const chunks = [];
-    filter.ondata = (event) => {
-      chunks.push(new Uint8Array(event.data));
-      filter.write(event.data);
-    };
-    filter.onstop = () => {
-      filter.close();
-      try {
-        let total = 0;
-        for (const c of chunks) total += c.length;
-        const merged = new Uint8Array(total);
-        let off = 0;
-        for (const c of chunks) { merged.set(c, off); off += c.length; }
-        handleInterceptedBody(new TextDecoder("utf-8").decode(merged));
-      } catch (e) {
-        console.error("[Munchy] response decode failed", details.url, e);
-      }
-    };
-    filter.onerror = () => {};
   },
   { urls: ["*://*.spotify.com/*"], types: ["xmlhttprequest"] },
-  ["blocking", "requestBody"]
+  ["requestBody"]
 );
 
 // Pathfinder GraphQL operation template capture. Both v1 (POST body) and v2
@@ -151,8 +129,6 @@ async function spotifyReplay(operationName, vars = {}) {
   if (!res.ok) {
     throw new Error(`Replay ${operationName} failed: ${res.status} ${text.slice(0, 200)}`);
   }
-  // The filterResponseData listener parses the body separately, so we don't
-  // re-process it here.
   try { return JSON.parse(text); } catch { return null; }
 }
 
@@ -218,7 +194,12 @@ async function listAllPlaylistsViaApi() {
       const inner = item.item?.data || item;
       const uri = inner.uri || "";
       if (uri.includes(":playlist:")) {
+        SpotifyCapture._addPlaylist(inner);
         playlists.push({ uri, name: inner.name || uri });
+      } else if (uri.includes(":album:")) {
+        SpotifyCapture._addAlbum(inner);
+      } else if (uri.includes(":artist:")) {
+        SpotifyCapture._addArtist(inner);
       }
     }
     if (items.length === 0) break;
@@ -442,14 +423,6 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return false;
   }
 });
-
-// ── Intercepted body handler ───────────────────────────────────────────────
-
-function handleInterceptedBody(body) {
-  let data;
-  try { data = JSON.parse(body); } catch { return; }
-  SpotifyCapture.processResponse(data);
-}
 
 // ── Status ─────────────────────────────────────────────────────────────────
 
