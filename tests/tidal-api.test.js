@@ -85,3 +85,58 @@ describe("_fetch", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("getUserPlaylists pagination", () => {
+  function jsonRes(body) {
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      text: async () => JSON.stringify(body),
+    };
+  }
+
+  it("returns a single page when total fits within the limit", async () => {
+    const items = Array.from({ length: 3 }, (_, i) => ({ uuid: `p${i}`, title: `P${i}` }));
+    globalThis.fetch = vi.fn().mockResolvedValueOnce(jsonRes({ items, totalNumberOfItems: 3 }));
+
+    const result = await TidalAPI.getUserPlaylists("tok", "uid");
+    expect(result).toHaveLength(3);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("concatenates multiple pages until totalNumberOfItems is reached", async () => {
+    const page1 = Array.from({ length: 50 }, (_, i) => ({ uuid: `a${i}`, title: `A${i}` }));
+    const page2 = Array.from({ length: 50 }, (_, i) => ({ uuid: `b${i}`, title: `B${i}` }));
+    const page3 = Array.from({ length: 20 }, (_, i) => ({ uuid: `c${i}`, title: `C${i}` }));
+
+    globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce(jsonRes({ items: page1, totalNumberOfItems: 120 }))
+      .mockResolvedValueOnce(jsonRes({ items: page2, totalNumberOfItems: 120 }))
+      .mockResolvedValueOnce(jsonRes({ items: page3, totalNumberOfItems: 120 }));
+
+    const result = await TidalAPI.getUserPlaylists("tok", "uid");
+    expect(result).toHaveLength(120);
+    expect(fetch).toHaveBeenCalledTimes(3);
+    // verify offset=0, 50, 100 in the requested URLs
+    const urls = fetch.mock.calls.map((c) => c[0]);
+    expect(urls[0]).toContain("offset=0");
+    expect(urls[1]).toContain("offset=50");
+    expect(urls[2]).toContain("offset=100");
+  });
+
+  it("findPlaylistByName matches a playlist on a later page", async () => {
+    const page1 = Array.from({ length: 50 }, (_, i) => ({ uuid: `a${i}`, title: `A${i}` }));
+    const page2 = [
+      ...Array.from({ length: 49 }, (_, i) => ({ uuid: `b${i}`, title: `B${i}` })),
+      { uuid: "target-uuid", title: "Imported from Spotify" },
+    ];
+
+    globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce(jsonRes({ items: page1, totalNumberOfItems: 100 }))
+      .mockResolvedValueOnce(jsonRes({ items: page2, totalNumberOfItems: 100 }));
+
+    const found = await TidalAPI.findPlaylistByName("tok", "uid", "Imported from Spotify");
+    expect(found).toEqual({ uuid: "target-uuid", title: "Imported from Spotify" });
+  });
+});
