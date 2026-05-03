@@ -194,12 +194,12 @@ async function listAllPlaylistsViaApi() {
       const inner = item.item?.data || item;
       const uri = inner.uri || "";
       if (uri.includes(":playlist:")) {
-        SpotifyCapture._addPlaylist(inner);
+        SpotifyCapture.addPlaylist(inner);
         playlists.push({ uri, name: inner.name || uri });
       } else if (uri.includes(":album:")) {
-        SpotifyCapture._addAlbum(inner);
+        SpotifyCapture.addAlbum(inner);
       } else if (uri.includes(":artist:")) {
-        SpotifyCapture._addArtist(inner);
+        SpotifyCapture.addArtist(inner);
       }
     }
     if (items.length === 0) break;
@@ -254,7 +254,7 @@ async function fetchLikedSongsViaApi() {
       if (!found) continue;
       // Backfill uri from the wrapper if the Track itself didn't carry one.
       const trackData = found.node.uri ? found.node : { ...found.node, uri: found.uri };
-      const t = SpotifyCapture._normalizeTrack(trackData, item.addedAt || item.added_at);
+      const t = SpotifyCapture.normalizeTrack(trackData, item.addedAt || item.added_at);
       if (t) tracks.push(t);
     }
     if (items.length === 0) break;
@@ -281,7 +281,7 @@ async function fetchPlaylistTracksViaApi(uri) {
       const found = findTrackNode(item);
       if (!found) continue;
       const trackData = found.node.uri ? found.node : { ...found.node, uri: found.uri };
-      const t = SpotifyCapture._normalizeTrack(trackData, item.addedAt);
+      const t = SpotifyCapture.normalizeTrack(trackData, item.addedAt);
       if (t) tracks.push(t);
     }
     if (items.length === 0) break;
