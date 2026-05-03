@@ -26,7 +26,6 @@ const SPOTIFY_REPLAY_HEADERS = new Set([
 ]);
 
 const state = {
-  spotifyToken: null,
   tidalToken: null,
   exporting: false,
   syncing: false,
@@ -40,7 +39,6 @@ const state = {
 
 (async () => {
   const tokens = await Storage.getTokens();
-  if (tokens.spotify) state.spotifyToken = tokens.spotify;
   if (tokens.tidal) state.tidalToken = tokens.tidal;
   const auth = await Storage.getSpotifyAuth();
   if (auth.headers) state.spotifyHeaders = auth.headers;
@@ -345,7 +343,6 @@ function schedulePersistAuth() {
 
 async function persistTokens() {
   await Storage.saveTokens({
-    spotify: state.spotifyToken,
     tidal: state.tidalToken,
   });
 }
@@ -364,13 +361,6 @@ browser.webRequest.onBeforeSendHeaders.addListener(
       if (isPathfinder && SPOTIFY_REPLAY_HEADERS.has(name) && state.spotifyHeaders[name] !== header.value) {
         state.spotifyHeaders[name] = header.value;
         changed = true;
-      }
-      if (name === "authorization") {
-        const match = header.value.match(/^Bearer\s+(.+)$/i);
-        if (match && match[1] !== state.spotifyToken) {
-          state.spotifyToken = match[1];
-          persistTokens();
-        }
       }
     }
     if (changed) {
@@ -492,7 +482,7 @@ async function handleGetStatus() {
   const templatesReady = REQUIRED_TEMPLATES.every((op) => !!state.spotifyTemplates[op]);
 
   return {
-    spotifyConnected: !!state.spotifyToken,
+    spotifyConnected: !!state.spotifyHeaders.authorization,
     tidalConnected: !!state.tidalToken,
     hasLibrary: !!library,
     libraryStats,
