@@ -24,6 +24,7 @@
     "scripts": [
       "lib/storage.js",
       "lib/spotify-api.js",
+      "lib/track-match.js",
       "lib/tidal-api.js",
       "background/background.js"
     ],
