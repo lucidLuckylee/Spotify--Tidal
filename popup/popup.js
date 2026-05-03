@@ -28,9 +28,10 @@ function appendChildren(el, children) {
 
 function rawSvg(markup) {
   // Build an SVG element from a string. Returns the root <svg> node.
-  const tpl = document.createElement("template");
-  tpl.innerHTML = markup.trim();
-  return tpl.content.firstChild;
+  // DOMParser (vs template.innerHTML) keeps AMO's static analyzer happy —
+  // markup here is always a hardcoded literal from the icon table below.
+  const doc = new DOMParser().parseFromString(markup.trim(), "image/svg+xml");
+  return document.importNode(doc.documentElement, true);
 }
 
 function clear(el) { while (el.firstChild) el.removeChild(el.firstChild); }
