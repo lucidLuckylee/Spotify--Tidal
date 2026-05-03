@@ -594,58 +594,111 @@ async function handleExportTidal(options = {}) {
         const skipped = pl.tracks.length - toExport.length;
         if (skipped > 0) sendLog(`Liked Songs: skipping ${skipped} already-exported`);
 
+        // Three-phase export so the Tidal-side addedAt timestamps mirror the
+        // Spotify chronology (Tidal favorites have no manual position, only
+        // server-side timestamp ordering).
+        //
+        //   1. Parallel match — store {track, match|error} indexed by source
+        //      position so dedup is deterministic later.
+        //   2. Sequential dedup walk in source order (firstHolder = lowest
+        //      index, not first-to-complete).
+        //   3. Sort the surviving matches by addedAt ASC and call
+        //      addTrackToFavorites strictly sequentially. The endpoint takes
+        //      one trackId per request, so this is the only way to control
+        //      the order Tidal stamps them with.
         const total = toExport.length;
+        const matchResults = new Array(total);
         let done = 0;
-        const batchExportedIds = [];
-        // Tracks the first Spotify row that resolved to each Tidal ID inside
-        // this favorites batch. Subsequent rows resolving to the same ID are
-        // recorded as duplicates rather than counted as fresh matches.
-        const seenTidalIds = new Map();
 
-        await processInParallel(toExport, async (track) => {
+        await processInParallel(
+          toExport.map((track, idx) => ({ track, idx })),
+          async ({ track, idx }) => {
+            const desc = `${track.name} — ${(track.artists || []).join(", ")}`;
+            try {
+              matchResults[idx] = {
+                track,
+                match: await TidalAPI.matchTrack(state.tidalToken, track),
+              };
+            } catch (e) {
+              matchResults[idx] = { track, error: e };
+            }
+            done++;
+            if (done % CONCURRENCY === 0 || done === total) {
+              sendProgress("EXPORT_PROGRESS", { phase: "Liked Songs", current: done, total, name: desc });
+            }
+          },
+        );
+
+        const seenTidalIds = new Map();
+        const toAdd = [];
+        const batchExportedIds = [];
+        let lsMatched = 0;
+        let lsDuplicates = 0;
+        let lsFailed = 0;
+        for (const result of matchResults) {
+          if (!result) continue;
+          const { track, match, error } = result;
+          if (error) {
+            failed.push({ ...track, reason: error.message });
+            lsFailed++;
+          } else if (!match) {
+            failed.push({ ...track, reason: "No match found" });
+            lsFailed++;
+          } else {
+            const firstHolder = seenTidalIds.get(match.tidalId);
+            if (firstHolder) {
+              console.warn("[Munchy] duplicate match — two Spotify tracks resolved to the same Tidal ID", {
+                tidalId: match.tidalId,
+                tidalTitle: match.title,
+                playlist: "Liked Songs",
+                duplicate: { name: track.name, artists: track.artists, album: track.album, durationMs: track.durationMs, spotifyUri: track.spotifyUri },
+                firstHolder: { name: firstHolder.name, artists: firstHolder.artists, album: firstHolder.album, durationMs: firstHolder.durationMs, spotifyUri: firstHolder.spotifyUri },
+              });
+              duplicates.push({
+                ...track,
+                tidalId: match.tidalId,
+                duplicateOf: { spotifyId: firstHolder.spotifyId, name: firstHolder.name, artists: firstHolder.artists },
+              });
+              batchExportedIds.push(track.spotifyId);
+              lsDuplicates++;
+            } else {
+              seenTidalIds.set(match.tidalId, track);
+              toAdd.push({ track, tidalId: match.tidalId });
+            }
+          }
+        }
+
+        // Oldest first: the earliest-saved Spotify track gets the earliest
+        // Tidal addedAt, so Tidal's "recently added" view matches Spotify's.
+        // Empty addedAt sorts before populated values, which is fine.
+        toAdd.sort((a, b) => {
+          const ta = a.track.addedAt || "";
+          const tb = b.track.addedAt || "";
+          return ta < tb ? -1 : ta > tb ? 1 : 0;
+        });
+
+        let addDone = 0;
+        for (const { track, tidalId } of toAdd) {
           const desc = `${track.name} — ${(track.artists || []).join(", ")}`;
           try {
-            const match = await TidalAPI.matchTrack(state.tidalToken, track);
-            if (match) {
-              const firstHolder = seenTidalIds.get(match.tidalId);
-              if (firstHolder) {
-                console.warn("[Munchy] duplicate match — two Spotify tracks resolved to the same Tidal ID", {
-                  tidalId: match.tidalId,
-                  tidalTitle: match.title,
-                  playlist: "Liked Songs",
-                  duplicate: { name: track.name, artists: track.artists, album: track.album, durationMs: track.durationMs, spotifyUri: track.spotifyUri },
-                  firstHolder: { name: firstHolder.name, artists: firstHolder.artists, album: firstHolder.album, durationMs: firstHolder.durationMs, spotifyUri: firstHolder.spotifyUri },
-                });
-                duplicates.push({
-                  ...track,
-                  tidalId: match.tidalId,
-                  duplicateOf: { spotifyId: firstHolder.spotifyId, name: firstHolder.name, artists: firstHolder.artists },
-                });
-                batchExportedIds.push(track.spotifyId);
-              } else {
-                seenTidalIds.set(match.tidalId, track);
-                await TidalAPI.addTrackToFavorites(state.tidalToken, userId, match.tidalId);
-                matched.push({ ...track, tidalId: match.tidalId });
-                batchExportedIds.push(track.spotifyId);
-              }
-            } else {
-              failed.push({ ...track, reason: "No match found" });
-            }
+            await TidalAPI.addTrackToFavorites(state.tidalToken, userId, tidalId);
+            matched.push({ ...track, tidalId });
+            batchExportedIds.push(track.spotifyId);
+            lsMatched++;
           } catch (e) {
             failed.push({ ...track, reason: e.message });
+            lsFailed++;
           }
-          done++;
-          if (done % CONCURRENCY === 0 || done === total) {
-            sendProgress("EXPORT_PROGRESS", { phase: "Liked Songs", current: done, total, name: desc });
-          }
-        });
+          addDone++;
+          sendProgress("EXPORT_PROGRESS", { phase: "Liked Songs (saving)", current: addDone, total: toAdd.length, name: desc });
+        }
+
         if (batchExportedIds.length > 0) {
           await Storage.addExportedIds(batchExportedIds);
         }
-        const dupCt = duplicates.length;
-        sendLog(`Liked Songs: ${matched.length} matched`
-          + (dupCt ? `, ${dupCt} duplicate` : "")
-          + `, ${failed.length} unmatched`
+        sendLog(`Liked Songs: ${lsMatched} matched`
+          + (lsDuplicates ? `, ${lsDuplicates} duplicate` : "")
+          + `, ${lsFailed} unmatched`
           + (skipped ? `, ${skipped} skipped` : ""));
       } else {
         sendProgress("EXPORT_PROGRESS", { phase: pl.name, current: 0, total: pl.tracks.length, name: "Finding/creating playlist..." });
@@ -653,57 +706,76 @@ async function handleExportTidal(options = {}) {
           const { uuid: playlistId, etag: initialEtag, existed } = await TidalAPI.getOrCreatePlaylist(state.tidalToken, userId, pl.name, pl.description || "Imported from Spotify");
           sendLog(existed ? `Found existing playlist: ${pl.name}` : `Created playlist: ${pl.name}`);
 
-          // Tidal IDs in insertion order, deduplicated. Spotify rows that
-          // collapse onto an already-seen ID get filed under `duplicates`
-          // and don't inflate the matched count.
-          const seenTidalIds = new Map();
-          let done = 0;
+          // Two-phase to preserve Spotify's playlist UI order on Tidal:
+          //   1. Parallel match — store {track, match|error} indexed by source
+          //      position, no shared mutable state inside the parallel callback.
+          //   2. Sequential walk in source order — duplicate detection becomes
+          //      deterministic (firstHolder = lowest index, not first-to-complete)
+          //      and the resulting trackId list keeps the original ordering.
           const total = pl.tracks.length;
+          const matchResults = new Array(total);
+          let done = 0;
+          await processInParallel(
+            pl.tracks.map((track, idx) => ({ track, idx })),
+            async ({ track, idx }) => {
+              const desc = `${track.name} — ${(track.artists || []).join(", ")}`;
+              try {
+                matchResults[idx] = {
+                  track,
+                  match: await TidalAPI.matchTrack(state.tidalToken, track),
+                };
+              } catch (e) {
+                matchResults[idx] = { track, error: e };
+              }
+              done++;
+              if (done % CONCURRENCY === 0 || done === total) {
+                sendProgress("EXPORT_PROGRESS", { phase: pl.name, current: done, total, name: desc });
+              }
+            },
+          );
+
+          const seenTidalIds = new Map();
+          const orderedTrackIds = [];
           let plMatched = 0;
           let plDuplicates = 0;
           let plFailed = 0;
-          await processInParallel(pl.tracks, async (track) => {
-            const desc = `${track.name} — ${(track.artists || []).join(", ")}`;
-            try {
-              const match = await TidalAPI.matchTrack(state.tidalToken, track);
-              if (match) {
-                const firstHolder = seenTidalIds.get(match.tidalId);
-                if (firstHolder) {
-                  console.warn("[Munchy] duplicate match — two Spotify tracks resolved to the same Tidal ID", {
-                    tidalId: match.tidalId,
-                    tidalTitle: match.title,
-                    playlist: pl.name,
-                    duplicate: { name: track.name, artists: track.artists, album: track.album, durationMs: track.durationMs, spotifyUri: track.spotifyUri },
-                    firstHolder: { name: firstHolder.name, artists: firstHolder.artists, album: firstHolder.album, durationMs: firstHolder.durationMs, spotifyUri: firstHolder.spotifyUri },
-                  });
-                  duplicates.push({
-                    ...track,
-                    tidalId: match.tidalId,
-                    playlist: pl.name,
-                    duplicateOf: { spotifyId: firstHolder.spotifyId, name: firstHolder.name, artists: firstHolder.artists },
-                  });
-                  plDuplicates++;
-                } else {
-                  seenTidalIds.set(match.tidalId, track);
-                  matched.push({ ...track, tidalId: match.tidalId });
-                  plMatched++;
-                }
-              } else {
-                failed.push({ ...track, reason: "No match found", playlist: pl.name });
-                plFailed++;
-              }
-            } catch (e) {
-              failed.push({ ...track, reason: e.message, playlist: pl.name });
+          for (const result of matchResults) {
+            if (!result) continue;
+            const { track, match, error } = result;
+            if (error) {
+              failed.push({ ...track, reason: error.message, playlist: pl.name });
               plFailed++;
+            } else if (!match) {
+              failed.push({ ...track, reason: "No match found", playlist: pl.name });
+              plFailed++;
+            } else {
+              const firstHolder = seenTidalIds.get(match.tidalId);
+              if (firstHolder) {
+                console.warn("[Munchy] duplicate match — two Spotify tracks resolved to the same Tidal ID", {
+                  tidalId: match.tidalId,
+                  tidalTitle: match.title,
+                  playlist: pl.name,
+                  duplicate: { name: track.name, artists: track.artists, album: track.album, durationMs: track.durationMs, spotifyUri: track.spotifyUri },
+                  firstHolder: { name: firstHolder.name, artists: firstHolder.artists, album: firstHolder.album, durationMs: firstHolder.durationMs, spotifyUri: firstHolder.spotifyUri },
+                });
+                duplicates.push({
+                  ...track,
+                  tidalId: match.tidalId,
+                  playlist: pl.name,
+                  duplicateOf: { spotifyId: firstHolder.spotifyId, name: firstHolder.name, artists: firstHolder.artists },
+                });
+                plDuplicates++;
+              } else {
+                seenTidalIds.set(match.tidalId, track);
+                orderedTrackIds.push(match.tidalId);
+                matched.push({ ...track, tidalId: match.tidalId });
+                plMatched++;
+              }
             }
-            done++;
-            if (done % CONCURRENCY === 0 || done === total) {
-              sendProgress("EXPORT_PROGRESS", { phase: pl.name, current: done, total, name: desc });
-            }
-          });
-          const uniqueTrackIds = [...seenTidalIds.keys()];
-          if (uniqueTrackIds.length > 0) {
-            await TidalAPI.addTracksToPlaylist(state.tidalToken, playlistId, uniqueTrackIds, initialEtag);
+          }
+
+          if (orderedTrackIds.length > 0) {
+            await TidalAPI.addTracksToPlaylist(state.tidalToken, playlistId, orderedTrackIds, initialEtag);
           }
           sendLog(`${pl.name}: ${plMatched} matched`
             + (plDuplicates ? `, ${plDuplicates} duplicate` : "")
