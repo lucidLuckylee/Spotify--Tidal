@@ -1,7 +1,7 @@
 # Spotify → Tidal Library Sync
 
 Firefox extension that copies your Spotify library — liked songs, playlists,
-followed artists — over to Tidal.
+saved albums, followed artists — over to Tidal.
 
 ## How it works
 
@@ -22,7 +22,6 @@ asked for.
 | --------------------- | -------------------------------------------------------------- |
 | `webRequest`          | Observe your own Spotify/Tidal API calls to learn auth headers. Read-only; nothing is modified. |
 | `storage`             | Cache the captured library and which tracks are already exported. `browser.storage.local`, on-device only. |
-| `tabs`                | Detect whether Spotify/Tidal tabs are open and open per-track search links. Never reads tab content. |
 | `*://*.spotify.com/*` | Replay Spotify API calls.                                      |
 | `*://*.tidal.com/*`   | Search Tidal and write playlists/favorites.                    |
 

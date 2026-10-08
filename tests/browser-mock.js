@@ -26,25 +26,4 @@ globalThis.browser = {
       },
     },
   },
-  runtime: {
-    sendMessage: async () => ({}),
-    onMessage: {
-      addListener() {},
-      removeListener() {},
-    },
-  },
-  tabs: {
-    query: async () => [],
-    create: async () => ({}),
-    update: async () => ({}),
-    sendMessage: async () => ({}),
-    onUpdated: {
-      addListener() {},
-      removeListener() {},
-    },
-  },
-  webRequest: {
-    onHeadersReceived: { addListener() {} },
-    onBeforeSendHeaders: { addListener() {} },
-  },
 };

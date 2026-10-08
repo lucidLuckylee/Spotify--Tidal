@@ -2,7 +2,7 @@
   "manifest_version": 2,
   "name": "Spotify to Tidal Library Sync",
   "version": "1.0.1",
-  "description": "Transfer your music library from Spotify to Tidal. Captures liked songs, playlists, and followed artists, then matches and exports them to Tidal.",
+  "description": "Transfer your music library from Spotify to Tidal. Captures liked songs, playlists, saved albums, and followed artists, then matches and exports them to Tidal.",
   "browser_specific_settings": {
     "gecko": {
       "id": "spotify-tidal-sync@munchy",
@@ -19,7 +19,6 @@
   "permissions": [
     "webRequest",
     "storage",
-    "tabs",
     "*://*.spotify.com/*",
     "*://*.tidal.com/*"
   ],

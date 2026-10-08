@@ -52,12 +52,6 @@ const CHECKS = [
     isDone: (s) => !s.missingTemplates?.includes("libraryV3"),
   },
   {
-    label: "Open Liked Songs",
-    url: "https://open.spotify.com/collection/tracks",
-    short: "collection/tracks",
-    isDone: (s) => !s.missingTemplates?.includes("fetchLibraryTracks"),
-  },
-  {
     label: "Open any playlist",
     url: "https://open.spotify.com",
     short: "open.spotify.com",
@@ -967,8 +961,7 @@ let lastStatus = {
   exportState: null,
   exporting: false,
   syncing: false,
-  syncStatus: "",
-  missingTemplates: ["libraryV3", "fetchLibraryTracks", "fetchPlaylistContents"],
+  missingTemplates: ["libraryV3", "fetchPlaylistContents"],
 };
 
 let headerEl = null;

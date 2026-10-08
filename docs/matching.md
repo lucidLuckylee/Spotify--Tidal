@@ -115,7 +115,7 @@ simplified per the title rules). If either is missing, score = `0.5`.
 #### Qualifier hard-reject
 
 Build a qualifier set from each side's *original* (non-simplified) title by
-matching the regex `\b(remix|live|acoustic|instrumental|acapella|remastered|demo|radio edit|edit|mix|version|extended|club mix|dub|karaoke|sped up|slowed)\b` (case-insensitive) and taking the unique tokens.
+matching the regex `\b(remix|live|acoustic|instrumental|acapella|demo|radio edit|edit|mix|extended|club mix|dub|karaoke|sped up|slowed)\b` (case-insensitive) and taking the unique tokens.
 
 If the symmetric difference of the two sets is non-empty, the candidate is
 rejected outright (final score = `0`). This is the load-bearing rule that
@@ -205,5 +205,5 @@ we have a regression suite.
 
 The algorithm lives in `lib/track-match.js` as a global `TrackMatch` object,
 matching the existing background-script style (non-ESM, attached as a script
-in `manifest.json`). `TidalAPI.matchTrack` calls `TrackMatch.pickBest` after
-running its own ISRC pass.
+in `manifest.json`). `TidalAPI.matchTrack` calls `TrackMatch.pickBest` on the
+name-search candidates.

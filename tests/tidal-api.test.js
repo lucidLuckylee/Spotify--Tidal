@@ -71,7 +71,7 @@ describe("_fetch", () => {
     expect(fetch).toHaveBeenCalledTimes(4);
   });
 
-  it("retries exactly N times on 429 then throws", async () => {
+  it("throws immediately on 429 when retries are exhausted", async () => {
     const rateLimitRes = {
       ok: false,
       status: 429,

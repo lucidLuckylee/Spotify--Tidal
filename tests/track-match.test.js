@@ -25,6 +25,11 @@ const cand = (id, title, artists, opts = {}) => ({
 });
 
 describe("simplifyTitle", () => {
+  it("keeps titles that start with a parenthetical", () => {
+    expect(TrackMatch.simplifyTitle("(Don't Fear) The Reaper")).toBe("(don't fear) the reaper");
+    expect(TrackMatch.simplifyTitle("(I Can't Get No) Satisfaction")).not.toBe("");
+  });
+
   it("strips parenthetical and bracket suffixes", () => {
     expect(TrackMatch.simplifyTitle("Cafe (feat. Friend)")).toBe("cafe");
     expect(TrackMatch.simplifyTitle("Song [Bonus Track]")).toBe("song");
@@ -179,10 +184,9 @@ describe("pickBest", () => {
     expect(TrackMatch.pickBest(src, candidates)).toBeNull();
   });
 
-  it("picks the version-matching candidate over the generic top hit", () => {
-    // Simulates the bug: search returns the album version first, but the
-    // user wants the radio edit. The matcher should reject the album version
-    // and (in this test) return null because no remix-version candidate exists.
+  it("rejects every candidate when none carries the source's qualifier", () => {
+    // Search returns the album version first, but the user wants the radio
+    // edit; with no radio-edit candidate the matcher returns null.
     const src = t("Lose Yourself - Radio Edit", ["Eminem"], { durationMs: 320000 });
     const candidates = [
       cand(1, "Lose Yourself", ["Eminem"], { duration: 326 }),
